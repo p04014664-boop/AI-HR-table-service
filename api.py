@@ -103,6 +103,18 @@ def _backfill(body):
     ts = _parse_time_ms(body.get("interviewTime"))
     if ts:
         upd["一面时间"] = ts
+    # 候选人给出了期望的改期时间 → 置"要改期" + 群里@一面面试官拍板(改一面时间=拍板,规则⑧自动通知候选人)
+    if body.get("expectTime"):
+        upd["触达状态"] = "要改期"
+        iv = f.get("一面面试官")
+        at_id = iv[0].get("id") if isinstance(iv, list) and iv else None
+        at = f'<at user_id="{at_id}"></at> ' if at_id else ""
+        try:
+            fs.send_group_text(cfg.REMIND_CHAT_ID,
+                f"{at}候选人【{_cell(f.get('姓名')) or rid}】期望把面试改到【{body['expectTime']}】。"
+                f"同意就把表格里的一面时间改成它;不方便就改成你方便的时间。改完我会自动通知候选人确认~")
+        except Exception as e:
+            log.warning(f"改期拍板提醒发送失败: {e}")
     name = _cell(f.get("姓名"))
     if cfg.DRY_RUN:
         log.info(f"[DRY] backfill {rid}: {json.dumps(upd, ensure_ascii=False)[:150]}")
