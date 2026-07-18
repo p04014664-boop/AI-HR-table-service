@@ -164,6 +164,56 @@ def rule2_reach():
     return done
 
 
+def rule5_handover():
+    """规则⑤(转人工)：进度表【转人工】勾选状态变化 → 同步给触达服务(宏佳)，
+    由它更新 Mongo 里该候选人触达任务的 humanTakeover。true=AI 停止接待、HR 真人跟进；取消勾选=恢复AI。
+    分工铁律：本服务只动表格；Mongo/对外发消息一律经触达服务。
+    幂等：state 记录每条的上次状态，只有变化才调；调失败不记状态、下轮重试。"""
+    state = _load_state()
+    known = state.setdefault("handover", {})
+    records = fs.list_records(cfg.PROG_APP, cfg.PROG_TABLE)
+    if records and "转人工" not in {k for r in records[:50] for k in r["fields"]}:
+        # 字段还没建：查字段表确认，没有就本轮跳过(等玄玄在表里加字段，加了自动生效)
+        names = [f_["field_name"] for f_ in fs.list_fields(cfg.PROG_APP, cfg.PROG_TABLE)]
+        if "转人工" not in names:
+            return 0
+    done = 0
+    for r in records:
+        rid = r["record_id"]
+        cur = bool(r["fields"].get("转人工"))
+        prev = known.get(rid)
+        if prev is None and not cur:
+            known[rid] = False       # 首次见到且未勾选：只登记，不打扰触达服务
+            continue
+        if prev == cur:
+            continue
+        name = _cell(r["fields"].get("姓名"))
+        if cfg.DRY_RUN:
+            log.info(f"[DRY] 规则⑤→转人工: {name} handover={cur}")
+            known[rid] = cur
+        else:
+            try:
+                resp = requests.post(f"{cfg.REACH_URL}/handover",
+                                     json={"dataId": rid, "handover": cur}, timeout=15)
+                j = resp.json() if resp.status_code == 200 else {}
+                if j.get("ok"):
+                    log.info(f"✅ 规则⑤转人工同步: {name} → {'人工接管' if cur else '恢复AI'} ({j.get('taskId')})")
+                    known[rid] = cur
+                elif j.get("msg", "").startswith("dataId"):
+                    # 该记录压根没触达任务(比如还没触达过)：登记状态即可，不算失败
+                    log.info(f"  规则⑤: {name} 无触达任务，只记状态 handover={cur}")
+                    known[rid] = cur
+                else:
+                    log.warning(f"  规则⑤ {name} 同步失败({resp.status_code}): {resp.text[:120]}，下轮重试")
+                    continue
+            except Exception as e:
+                log.warning(f"  规则⑤ {name} 调触达服务失败: {e}，下轮重试")
+                continue
+        done += 1
+    _save_state(state)
+    return done
+
+
 def rule4_position_correction():
     """校正联动：HR 在进度表人工改了【岗位】→ 本服务生成的面评自动跟上——
     改标题为 面试评价-新岗位-姓名 + 按新岗位的标准包重打AI初筛分。

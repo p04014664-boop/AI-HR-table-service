@@ -34,6 +34,12 @@ def cycle():
             log.info(f"校正联动完成：{n4} 份面评已随岗位校正更新")
     except Exception as e:
         log.error(f"校正联动出错: {e}")
+    try:
+        n5 = rules.rule5_handover()
+        if n5:
+            log.info(f"规则⑤完成：{n5} 条转人工状态已同步触达服务")
+    except Exception as e:
+        log.error(f"规则⑤(转人工)出错: {e}")
 
 
 def main():
