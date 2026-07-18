@@ -4,6 +4,7 @@ import time
 import logging
 from config import cfg
 import rules
+import api
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s",
@@ -46,6 +47,7 @@ def main():
     once = "--once" in sys.argv
     log.info(f"===【句子秒聘·表格管理服务】启动 · DRY_RUN={cfg.DRY_RUN} · "
              f"进度表={cfg.PROG_APP}/{cfg.PROG_TABLE} · 轮询{cfg.POLL_INTERVAL}s ===")
+    api.start()  # 触达服务回调接口(/progress/backfill /progress/handover)
     while True:
         cycle()
         if once:

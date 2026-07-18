@@ -146,13 +146,20 @@ def rule2_reach():
         if not phone:
             log.info(f"  {name} 勾了AI触达但无手机号，跳过(等补录)")
             continue
+        # 入参按 docs/触达服务接口文档.md 2.1：dataId 用于回填/转人工回调定位
+        payload = {
+            "dataId": r["record_id"],
+            "phone": phone,
+            "name": name,
+            "position": _cell(f.get("岗位")),
+            "interviewer": _cell(f.get("一面面试官")),
+            "interviewTime": f.get("一面时间") or "",
+        }
         if cfg.DRY_RUN:
-            log.info(f"[DRY] 规则②→触达: {name} phone={phone}")
+            log.info(f"[DRY] 规则②→触达: {json.dumps(payload, ensure_ascii=False)}")
         else:
             try:
-                requests.post(f"{cfg.REACH_URL}/reach",
-                              json={"name": name, "phone": phone, "candidateId": r["record_id"]},
-                              timeout=30)
+                requests.post(f"{cfg.REACH_URL}/reach", json=payload, timeout=30)
                 log.info(f"规则②已触发触达: {name}")
             except Exception as e:
                 log.warning(f"  {name} 触达调用失败: {e}")
