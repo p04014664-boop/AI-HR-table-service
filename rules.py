@@ -8,6 +8,7 @@ from feishu import Feishu
 import doubao
 import resume
 import mianping
+import standards
 
 log = logging.getLogger("rules")
 fs = Feishu()
