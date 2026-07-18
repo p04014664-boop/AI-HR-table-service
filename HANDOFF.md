@@ -10,7 +10,7 @@
 
 **项目文档（已发句子秒聘群）**：https://juzihudong.feishu.cn/docx/EDRyduP9uo8SoGxPLkVcZdGynEg 。句子秒聘群 chat_id=`oc_8f33f2eb5afd3efb810ed338d995cf3f`，**发群用秒聘bot(cli_aad38)API直发**，句子局长bot不在此群(230001)。
 
-**部署**：Docker 容器 `aihr-table` 跑在服务器 `101.126.100.251:/opt/aihr-table-service`（与宏佳触达服务 `miaopin` 并存），句子秒聘应用身份(cli_aad38)、每30秒轮询、DRY_RUN=false 真写、不依赖任何人CC/登录。`.env`（密钥）在服务器上，改代码用 `rsync` 到该目录再 `docker build && docker run`。
+**部署**：Docker 容器 `aihr-table` 跑在服务器 `公司服务器(IP不入公开仓库,见服务器/内部台账) /opt/aihr-table-service`（与宏佳触达服务 `miaopin` 并存），句子秒聘应用身份(cli_aad38)、每30秒轮询、DRY_RUN=false 真写、不依赖任何人CC/登录。`.env`（密钥）在服务器上，改代码用 `rsync` 到该目录再 `docker build && docker run`。
 
 **应用**：句子秒聘 `cli_aad38fd84da1dbb3`（app_secret 与豆包 ARK key **不进仓库**——在服务器 `/opt/aihr-table-service/.env`，或飞书开放平台/火山方舟控制台查）。已开权限：base:record读写删、drive上传、**docx:document(应用身份)**。真进度表高级权限里给「秒聘」角色配了"可编辑"。豆包 model `doubao-seed-2-0-lite-260428`(文字+视觉)。
 
@@ -49,7 +49,7 @@
 - AI-HR 来源表：`H4NTbtLkia9z3fsO0c7cWDWNnod / tblTSVXwu1onvPMa`（12字段，含联系方式，1482条、约面69）
 - 真进度表：`JUCZbMNaSaoviosYIsjcRKcynKc / tblBedUZDTl2PASn`（混着候选人+在职员工，去重必须用候选人ID别用姓名）
 - 测试进度表(现默认)：`WzXpbCdYgaZDk0s7dSiczy20nnc / tblVRrAmRPtQsY1L`
-- 触达服务：`http://ai-hr.juzibot.com`（宏佳，服务器 101.126.100.251 容器 miaopin）
+- 触达服务：`http://ai-hr.juzibot.com`（宏佳，公司服务器容器 miaopin）
 - 豆包模型：`doubao-seed-2-0-lite-260428`（同一模型文字+视觉）
 
 ## 待办 / 下一步
