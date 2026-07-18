@@ -6,6 +6,8 @@
 
 **代码仓库**：https://github.com/p04014664-boop/AI-HR-table-service （**公开**——玄玄拍板，公开前已抹服务器IP；GitHub账号 p04014664-boop，gh CLI 已登录本机）。宏佳触达服务仓库：git@github.com:JhjInsist/AI-HR.git（公开），本地克隆在 `../秒聘服务-宏佳/`（服务器旧版备份在 `../秒聘服务-宏佳-服务器旧版备份/`，含 .env）。**分工铁律（玄玄定的）：所有操作表格=本服务；所有操作Mongo+对外发消息=宏佳触达服务。**
 
+**联调状态(2026-07-18晚)**：宏佳已完成触达服务去表格化并部署;我方已群发三件事就绪+base URL `http://aihr-table:8090`(他配 TABLE_SERVICE_URL 即联调);反向转人工(HR勾框→停AI)已提 **PR https://github.com/JhjInsist/AI-HR/pull/1**(fork p04014664-boop/AI-HR,分支handover-endpoint),等他合+部署。**待对齐分歧:/reach 触发=勾AI触达(玄玄定)vs 一面信息就绪(宏佳文档),已在群里提出。**
+
 **⭐服务间接口（2026-07-18晚,已上线互通）**：按宏佳定的 `秒聘服务-宏佳/docs/触达服务接口文档.md` 实现了表格服务侧 HTTP 接口(api.py, 端口8090)：`POST /progress/backfill`(回填备忘录/一面时间,dataId定位、phone兜底) + `POST /progress/handover`(AI判定转人工→置【转人工】=是+备忘录记原因) + `/health`。容器加入宏佳建的 docker 网络 **`aihr-net`**，他的服务调 **`http://aihr-table:8090`**(容器内实测通)；宿主机调 127.0.0.1:8090。规则② `/reach` 入参已对齐契约{dataId,phone,name,position,interviewer,interviewTime}(触发仍按玄玄定的勾【AI触达】,非宏佳文档写的"一面信息就绪")。**转人工双向**：HR勾框→rule5→宏佳/handover→Mongo停AI；AI自判→宏佳调我/progress/handover→我置框=是(rule5回声同步Mongo,幂等收敛不成环)。进度表【转人工】复选框玄玄已建,rule5已在盯。
 
 **规则⑤转人工（2026-07-18新增，两端已写完）**：进度表【转人工】复选框(玄玄要建,还没建,建了自动生效)变化 → 本服务 POST 触达服务 `/handover {dataId,handover}` → 宏佳服务更新 Mongo reach_tasks.humanTakeover → 候选人消息 AI 静默不接待；取消勾选恢复AI。本服务侧已部署；**宏佳侧代码已提交进他仓库本地克隆(commit 490ada9: schema+/handover接口+onMessage拦截,tsc过)，但他服务器容器还是旧代码，endpoint 上线要他部署**——rule5 对 404/失败会warning+下轮重试，无害。
