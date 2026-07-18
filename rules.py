@@ -35,7 +35,7 @@ def _save_state(s):
     json.dump(s, open(cfg.STATE_FILE, "w"), ensure_ascii=False)
 
 
-def rule1_sync():
+def rule1_sync(prog_records):
     """规则①：AI-HR【HR评估=约面】→ 判岗位 + 解析简历 + 设面试官 → 写进度表。幂等(按候选人ID)。"""
     state = _load_state()
     synced = set(state["synced"])
@@ -45,7 +45,7 @@ def rule1_sync():
     screen = fs.field_options(cfg.PROG_APP, cfg.PROG_TABLE, "简历筛选")
 
     # 进度表里已被本服务 AI 同步过的人(按姓名)——第二道防重复
-    already = {_cell(r["fields"].get("姓名")) for r in fs.list_records(cfg.PROG_APP, cfg.PROG_TABLE)
+    already = {_cell(r["fields"].get("姓名")) for r in prog_records
                if "AI约面同步" in _cell(r["fields"].get("备忘录"))}
 
     records = fs.list_records(cfg.AIHR_APP, cfg.AIHR_TABLE, automatic_fields=True)
@@ -128,18 +128,51 @@ def rule1_sync():
     return done
 
 
+def fetch_progress():
+    """每轮只拉一次进度表(带 last_modified_by),各规则共用,别每条规则各扫一遍全表。"""
+    return fs.list_records(cfg.PROG_APP, cfg.PROG_TABLE, automatic_fields=True)
+
+
+def _at_of(record, f):
+    """群提醒@谁:优先最后改记录的人(真人操作才有),兜底@一面面试官,都没有返回空串。"""
+    at_id = (record.get("last_modified_by") or {}).get("id")
+    if not at_id:
+        iv = f.get("一面面试官")
+        at_id = iv[0].get("id") if isinstance(iv, list) and iv else None
+    return f'<at user_id="{at_id}"></at> ' if at_id else ""
+
+
+def _remind(text):
+    fs.send_group_text(cfg.REMIND_CHAT_ID, text)
+
+
 # 触达前必须齐的信息(玄玄定的:勾了AI触达≠直接触达,缺信息先@人补齐)
 _REACH_REQUIRED = ["联系方式", "岗位", "一面时间", "一面面试官"]
 
 
-def rule2_reach():
+def _invite(rid, f, round_name):
+    """调触达服务发起某一轮的约面邀约。首轮=加好友+邀约;后续轮=同号重触达(老好友直接收新邀约)。"""
+    payload = {
+        "dataId": rid,
+        "phone": _cell(f.get("联系方式")),
+        "name": _cell(f.get("姓名")),
+        "position": _cell(f.get("岗位")),
+        "interviewer": _cell(f.get(f"{round_name}面试官")),
+        "interviewTime": str(f.get(f"{round_name}时间") or ""),  # 传毫秒字符串,宏佳侧parseInterviewTime认13位
+        "round": round_name,  # 中台暂未用,先带上,话术分轮次时就有了
+    }
+    requests.post(f"{cfg.REACH_URL}/reach", json=payload, timeout=30)
+
+
+def rule2_reach(records):
     """规则②：进度表【AI触达】勾选 → 前置自检必填信息 → 齐了才调触达服务加企微好友。
     缺信息：不触达，去群里@点勾选的人(或一面面试官)报缺什么；补齐后下一轮自动触达。
     幂等：reached 按记录ID只触达一次；同一记录同一缺项组合只提醒一次(缺项变化会再提醒)。"""
     state = _load_state()
     reached = set(state["reached"])
     reminded = state.setdefault("reminded", {})
-    records = fs.list_records(cfg.PROG_APP, cfg.PROG_TABLE, automatic_fields=True)
+    invited = state.setdefault("round_invited", {})
+    known_time = state.setdefault("known_time", {})
     done = 0
     for r in records:
         f = r["fields"]
@@ -156,19 +189,13 @@ def rule2_reach():
         if missing:
             sig = ",".join(missing)
             if reminded.get(rid) != sig:
-                # @谁:优先点勾选的人(last_modified_by),没有就@一面面试官,都没有只报名字
-                at_id = (r.get("last_modified_by") or {}).get("id")
-                if not at_id:
-                    iv = f.get("一面面试官")
-                    at_id = iv[0].get("id") if isinstance(iv, list) and iv else None
-                at = f'<at user_id="{at_id}"></at> ' if at_id else ""
-                msg = (f"{at}候选人【{name or rid}】勾了AI触达，但还缺：{('、'.join(missing))}。"
+                msg = (f"{_at_of(r, f)}候选人【{name or rid}】勾了AI触达，但还缺：{('、'.join(missing))}。"
                        f"补齐后我会自动发起触达~")
                 if cfg.DRY_RUN:
                     log.info(f"[DRY] 规则②缺信息提醒: {msg}")
                 else:
                     try:
-                        fs.send_group_text(cfg.REMIND_CHAT_ID, msg)
+                        _remind(msg)
                         log.info(f"规则② {name} 缺{sig}，已群内提醒")
                     except Exception as e:
                         log.warning(f"  {name} 缺信息提醒发送失败: {e}")
@@ -176,25 +203,20 @@ def rule2_reach():
                 reminded[rid] = sig
             continue
 
-        # ── 信息齐了 → 触达。入参按 docs/触达服务接口文档.md 2.1 ──
-        payload = {
-            "dataId": rid,
-            "phone": _cell(f.get("联系方式")),
-            "name": name,
-            "position": _cell(f.get("岗位")),
-            "interviewer": _cell(f.get("一面面试官")),
-            "interviewTime": f.get("一面时间") or "",
-        }
+        # ── 信息齐了 → 首轮触达 ──
         if cfg.DRY_RUN:
-            log.info(f"[DRY] 规则②→触达: {json.dumps(payload, ensure_ascii=False)}")
+            log.info(f"[DRY] 规则②→触达: {name}")
         else:
             try:
-                requests.post(f"{cfg.REACH_URL}/reach", json=payload, timeout=30)
+                _invite(rid, f, "一面")
+                fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"触达状态": "待触达"})
                 log.info(f"规则②已触发触达: {name}")
             except Exception as e:
                 log.warning(f"  {name} 触达调用失败: {e}")
                 continue
         reached.add(rid)
+        invited[rid] = "一面"
+        known_time[rid] = f.get("一面时间")
         reminded.pop(rid, None)
         done += 1
     state["reached"] = list(reached)
@@ -202,19 +224,13 @@ def rule2_reach():
     return done
 
 
-def rule5_handover():
+def rule5_handover(records):
     """规则⑤(转人工)：进度表【转人工】勾选状态变化 → 同步给触达服务(宏佳)，
     由它更新 Mongo 里该候选人触达任务的 humanTakeover。true=AI 停止接待、HR 真人跟进；取消勾选=恢复AI。
     分工铁律：本服务只动表格；Mongo/对外发消息一律经触达服务。
     幂等：state 记录每条的上次状态，只有变化才调；调失败不记状态、下轮重试。"""
     state = _load_state()
     known = state.setdefault("handover", {})
-    records = fs.list_records(cfg.PROG_APP, cfg.PROG_TABLE)
-    if records and "转人工" not in {k for r in records[:50] for k in r["fields"]}:
-        # 字段还没建：查字段表确认，没有就本轮跳过(等玄玄在表里加字段，加了自动生效)
-        names = [f_["field_name"] for f_ in fs.list_fields(cfg.PROG_APP, cfg.PROG_TABLE)]
-        if "转人工" not in names:
-            return 0
     done = 0
     for r in records:
         rid = r["record_id"]
@@ -237,6 +253,11 @@ def rule5_handover():
                 if j.get("ok"):
                     log.info(f"✅ 规则⑤转人工同步: {name} → {'人工接管' if cur else '恢复AI'} ({j.get('taskId')})")
                     known[rid] = cur
+                    if cur:  # HR勾的转人工也在表上标出结构化状态
+                        try:
+                            fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"触达状态": "转人工中"})
+                        except Exception:
+                            pass
                 elif j.get("msg", "").startswith("dataId"):
                     # 该记录压根没触达任务(比如还没触达过)：登记状态即可，不算失败
                     log.info(f"  规则⑤: {name} 无触达任务，只记状态 handover={cur}")
@@ -252,12 +273,157 @@ def rule5_handover():
     return done
 
 
-def rule4_position_correction():
+def rule6_handover_overdue(records):
+    """规则⑥：转人工超过24小时还没取消 → 群里@人提醒一次(防止HR处理完忘了恢复AI,候选人被晾着)。"""
+    import time as _t
+    state = _load_state()
+    at_map = state.setdefault("handover_at", {})
+    reminded = state.setdefault("handover_reminded", {})
+    done = 0
+    for r in records:
+        rid = r["record_id"]
+        f = r["fields"]
+        if not f.get("转人工"):
+            at_map.pop(rid, None)
+            reminded.pop(rid, None)
+            continue
+        if rid not in at_map:
+            at_map[rid] = _t.time()  # 首次见到勾选,起表
+            continue
+        if _t.time() - at_map[rid] < 24 * 3600 or rid in reminded:
+            continue
+        name = _cell(f.get("姓名"))
+        msg = f"{_at_of(r, f)}候选人【{name or rid}】转人工已超过24小时。处理完了记得取消勾选恢复AI接待,别把候选人晾着~"
+        if cfg.DRY_RUN:
+            log.info(f"[DRY] 规则⑥转人工超时提醒: {name}")
+        else:
+            try:
+                _remind(msg)
+                log.info(f"规则⑥ {name} 转人工超24h,已提醒")
+            except Exception as e:
+                log.warning(f"  {name} 转人工超时提醒失败: {e}")
+                continue
+        reminded[rid] = _t.time()
+        done += 1
+    _save_state(state)
+    return done
+
+
+# 轮次链:上一轮反馈=通过 → 推进下一轮
+_ROUNDS = [("一面", "二面"), ("二面", "三面")]
+
+
+def rule7_rounds(records):
+    """规则⑦(轮次推进)：X面反馈=通过 → 下一轮信息没齐就群里@人提醒排面;
+    下一轮【时间+面试官】齐了 → 自动向候选人发下一轮邀约(老好友直接发,不再加好友)。
+    授权模型:首轮勾【AI触达】=授权AI跟这个候选人全程沟通,后续轮不用再勾。
+    门禁:没勾AI触达不动;转人工中不动;每记录每轮只邀约/提醒一次(state)。"""
+    state = _load_state()
+    reached = set(state["reached"])
+    invited = state.setdefault("round_invited", {})
+    r_reminded = state.setdefault("round_reminded", {})
+    known_time = state.setdefault("known_time", {})
+    done = 0
+    for r in records:
+        rid = r["record_id"]
+        f = r["fields"]
+        if rid not in reached:          # 首轮都没触达过的不归这里管
+            continue
+        if f.get("转人工"):              # 人工接管中,AI不推进
+            continue
+        name = _cell(f.get("姓名"))
+        for prev, nxt in _ROUNDS:
+            if _cell(f.get(f"{prev}反馈")) != "通过":
+                continue
+            if invited.get(rid) and _round_ge(invited[rid], nxt):
+                continue  # 这一轮已经邀约过
+            t, iv = f.get(f"{nxt}时间"), _cell(f.get(f"{nxt}面试官"))
+            if t and iv:
+                if cfg.DRY_RUN:
+                    log.info(f"[DRY] 规则⑦→{nxt}邀约: {name}")
+                else:
+                    try:
+                        _invite(rid, f, nxt)
+                        fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"触达状态": "已发邀约"})
+                        _remind(f"候选人【{name}】{prev}通过,已自动发出{nxt}邀约(面试官:{iv})。")
+                        log.info(f"规则⑦ {name} {nxt}邀约已发起")
+                    except Exception as e:
+                        log.warning(f"  {name} {nxt}邀约失败: {e}")
+                        continue
+                invited[rid] = nxt
+                known_time[rid] = t
+                done += 1
+            else:
+                mark = f"{nxt}缺排期"
+                if r_reminded.get(rid) != mark:
+                    lack = "、".join([x for x, v in ((f"{nxt}时间", t), (f"{nxt}面试官", iv)) if not v])
+                    msg = f"{_at_of(r, f)}候选人【{name}】{prev}已通过,请排{nxt}:补【{lack}】,填好我自动给候选人发{nxt}邀约~"
+                    if cfg.DRY_RUN:
+                        log.info(f"[DRY] 规则⑦排面提醒: {msg}")
+                    else:
+                        try:
+                            _remind(msg)
+                            log.info(f"规则⑦ {name} {prev}通过缺{nxt}排期,已提醒")
+                        except Exception as e:
+                            log.warning(f"  {name} 排面提醒失败: {e}")
+                            continue
+                    r_reminded[rid] = mark
+            break  # 一条记录一轮只推一步
+    _save_state(state)
+    return done
+
+
+def _round_ge(a, b):
+    order = {"一面": 1, "二面": 2, "三面": 3}
+    return order.get(a, 0) >= order.get(b, 0)
+
+
+def rule8_time_change(records):
+    """规则⑧(改期联动)：已触达候选人的当前轮【X面时间】被改 → 自动重发该轮邀约(候选人收到新时间)
+    + 群里通报。面试官/HR改表格时间=确认改期,不用学任何新操作。"""
+    state = _load_state()
+    reached = set(state["reached"])
+    invited = state.setdefault("round_invited", {})
+    known_time = state.setdefault("known_time", {})
+    done = 0
+    for r in records:
+        rid = r["record_id"]
+        f = r["fields"]
+        if rid not in reached or f.get("转人工"):
+            continue
+        rnd = invited.get(rid) or "一面"
+        cur = f.get(f"{rnd}时间")
+        if not cur:
+            continue
+        old = known_time.get(rid)
+        if old is None:
+            known_time[rid] = cur  # 首次登记,不触发
+            continue
+        if cur == old:
+            continue
+        name = _cell(f.get("姓名"))
+        if cfg.DRY_RUN:
+            log.info(f"[DRY] 规则⑧改期重邀: {name} {rnd} {old}→{cur}")
+        else:
+            try:
+                _invite(rid, f, rnd)
+                fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"触达状态": "已发邀约"})
+                _remind(f"候选人【{name}】的{rnd}时间已改,新邀约已自动发给候选人确认。")
+                log.info(f"规则⑧ {name} {rnd}改期重邀已发起")
+            except Exception as e:
+                log.warning(f"  {name} 改期重邀失败: {e}")
+                continue
+        known_time[rid] = cur
+        done += 1
+    _save_state(state)
+    return done
+
+
+def rule4_position_correction(records):
     """校正联动：HR 在进度表人工改了【岗位】→ 本服务生成的面评自动跟上——
     改标题为 面试评价-新岗位-姓名 + 按新岗位的标准包重打AI初筛分。
     「一、简历」「三、面试评价」(HR手写)整段不碰。只碰 备忘录=手动简历·AI解析 的行(深澜的面评绝不动)。
     幂等：标题已一致就跳过，零成本。"""
-    records = fs.list_records(cfg.PROG_APP, cfg.PROG_TABLE)
     done = 0
     for r in records:
         f = r["fields"]
@@ -298,13 +464,12 @@ def rule4_position_correction():
     return done
 
 
-def rule3_manual_resume():
+def rule3_manual_resume(records):
     """链路B：HR 手动往进度表丢一份简历(空白行只有附件) → 读简历自动填字段。
     只碰「有简历附件 + 姓名为空 + 备忘录为空」的行，绝不动任何已有记录。"""
     positions = fs.field_options(cfg.PROG_APP, cfg.PROG_TABLE, "岗位")
     categories = fs.field_options(cfg.PROG_APP, cfg.PROG_TABLE, "岗位大类")
     channels = fs.field_options(cfg.PROG_APP, cfg.PROG_TABLE, "渠道")
-    records = fs.list_records(cfg.PROG_APP, cfg.PROG_TABLE)
     done = 0
     for r in records:
         f = r["fields"]

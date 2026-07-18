@@ -73,6 +73,19 @@ def _write_async(rid, name, upd, tag):
     threading.Thread(target=run, daemon=True).start()
 
 
+# 触达服务的事件/状态 → 进度表【触达状态】单选(与表里选项一字不差)
+_STATUS_MAP = {
+    "ADD_SENT": "已发好友申请", "ADDING": "已发好友申请",
+    "CONFIRMED": "已加上好友",
+    "WELCOMED": "已发邀约",
+    "INTENT_ACCEPT": "已确认", "SCHEDULE_OK": "已确认",
+    "INTENT_RESCHEDULE": "要改期",
+    "INTENT_REJECT": "已拒绝",
+    "ADD_FAILED": "触达失败", "SEND_FAILED": "触达失败",
+    "HANDOVER": "转人工中",
+}
+
+
 def _backfill(body):
     rid, f = _locate(body.get("dataId"), body.get("phone"))
     if not rid:
@@ -81,6 +94,9 @@ def _backfill(body):
     if body.get("meetingLink"):
         note += f" 会议链接:{body['meetingLink']}"
     upd = {"备忘录": _append_memo(_cell(f.get("备忘录")), note)}
+    st = _STATUS_MAP.get((body.get("status") or body.get("event") or "").upper())
+    if st:
+        upd["触达状态"] = st
     ts = _parse_time_ms(body.get("interviewTime"))
     if ts:
         upd["一面时间"] = ts
@@ -101,7 +117,7 @@ def _handover(body):
     line = f"【转人工|{reason}】{body.get('reasonText') or ''}"
     if body.get("candidateReply"):
         line += f" 候选人原话:「{body['candidateReply']}」"
-    upd = {"转人工": True, "备忘录": _append_memo(_cell(f.get("备忘录")), line)}
+    upd = {"转人工": True, "触达状态": "转人工中", "备忘录": _append_memo(_cell(f.get("备忘录")), line)}
     name = _cell(f.get("姓名"))
     if cfg.DRY_RUN:
         log.info(f"[DRY] handover {rid}: {line}")
