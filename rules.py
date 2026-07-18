@@ -233,7 +233,7 @@ def rule5_handover():
             try:
                 resp = requests.post(f"{cfg.REACH_URL}/handover",
                                      json={"dataId": rid, "handover": cur}, timeout=15)
-                j = resp.json() if resp.status_code == 200 else {}
+                j = resp.json() if resp.ok else {}  # NestJS POST 默认返回 201,只认 200 会把成功当失败
                 if j.get("ok"):
                     log.info(f"✅ 规则⑤转人工同步: {name} → {'人工接管' if cur else '恢复AI'} ({j.get('taskId')})")
                     known[rid] = cur
