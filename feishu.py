@@ -49,6 +49,29 @@ class Feishu:
                 break
         return out
 
+    def get_record(self, app, table, rid):
+        """按 record_id 直查单条(比全表扫快两个量级)。不存在返回 None。"""
+        r = requests.get(
+            f"{BASE}/bitable/v1/apps/{app}/tables/{table}/records/{rid}",
+            headers=self._h(), timeout=20,
+        ).json()
+        if r.get("code") != 0:
+            return None
+        return r["data"]["record"]
+
+    def search_records(self, app, table, field, operator, value, limit=5):
+        """条件搜索(如 联系方式 contains 手机号)，服务端过滤，不拉全表。"""
+        r = requests.post(
+            f"{BASE}/bitable/v1/apps/{app}/tables/{table}/records/search",
+            headers=self._h(), params={"page_size": limit},
+            json={"filter": {"conjunction": "and",
+                             "conditions": [{"field_name": field, "operator": operator, "value": [value]}]}},
+            timeout=20,
+        ).json()
+        if r.get("code") != 0:
+            return []
+        return r["data"].get("items", [])
+
     def create_record(self, app, table, fields):
         r = requests.post(
             f"{BASE}/bitable/v1/apps/{app}/tables/{table}/records",

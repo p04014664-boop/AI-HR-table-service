@@ -27,16 +27,16 @@ def _cell(v):
 
 
 def _locate(data_id, phone):
-    """按 dataId 定位进度表记录,缺/找不到再按手机号(联系方式)兜底。返回 (record_id, fields) 或 (None, None)。"""
-    records = fs.list_records(cfg.PROG_APP, cfg.PROG_TABLE)
+    """按 dataId 直查定位进度表记录,缺/找不到再按手机号(联系方式)服务端搜索兜底。
+    都是单次 API(不拉全表),亚秒返回。返回 (record_id, fields) 或 (None, None)。"""
     if data_id:
-        for r in records:
-            if r["record_id"] == data_id:
-                return r["record_id"], r["fields"]
+        r = fs.get_record(cfg.PROG_APP, cfg.PROG_TABLE, data_id)
+        if r:
+            return r["record_id"], r["fields"]
     if phone:
         p = re.sub(r"\D", "", str(phone))[-11:]
-        for r in records:
-            if p and p in re.sub(r"\D", "", _cell(r["fields"].get("联系方式"))):
+        if p:
+            for r in fs.search_records(cfg.PROG_APP, cfg.PROG_TABLE, "联系方式", "contains", p):
                 return r["record_id"], r["fields"]
     return None, None
 
@@ -62,6 +62,17 @@ def _append_memo(old, line):
     return f"{old}\n{entry}" if old else entry
 
 
+def _write_async(rid, name, upd, tag):
+    """写表放后台线程:触达侧拿到 ok 即可往下走,不被写表耗时阻塞(宏佳联调要求)。"""
+    def run():
+        try:
+            fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, upd)
+            log.info(f"✅ {tag} 已写表 {name or rid}")
+        except Exception as e:
+            log.error(f"{tag} 异步写表失败 {name or rid}: {e}")
+    threading.Thread(target=run, daemon=True).start()
+
+
 def _backfill(body):
     rid, f = _locate(body.get("dataId"), body.get("phone"))
     if not rid:
@@ -73,11 +84,12 @@ def _backfill(body):
     ts = _parse_time_ms(body.get("interviewTime"))
     if ts:
         upd["一面时间"] = ts
+    name = _cell(f.get("姓名"))
     if cfg.DRY_RUN:
         log.info(f"[DRY] backfill {rid}: {json.dumps(upd, ensure_ascii=False)[:150]}")
     else:
-        fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, upd)
-    log.info(f"✅ backfill {_cell(f.get('姓名')) or rid}: {body.get('event', '')} {note[:60]}")
+        _write_async(rid, name, upd, "backfill")
+    log.info(f"backfill {name or rid}: {body.get('event', '')} {note[:60]}")
     return {"ok": True, "dataId": rid}
 
 
@@ -90,11 +102,12 @@ def _handover(body):
     if body.get("candidateReply"):
         line += f" 候选人原话:「{body['candidateReply']}」"
     upd = {"转人工": True, "备忘录": _append_memo(_cell(f.get("备忘录")), line)}
+    name = _cell(f.get("姓名"))
     if cfg.DRY_RUN:
         log.info(f"[DRY] handover {rid}: {line}")
     else:
-        fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, upd)
-    log.info(f"✅ handover {_cell(f.get('姓名')) or rid}: {reason} {body.get('reasonText', '')[:60]}")
+        _write_async(rid, name, upd, "handover")
+    log.info(f"handover {name or rid}: {reason} {body.get('reasonText', '')[:60]}")
     return {"ok": True, "dataId": rid}
 
 
