@@ -455,9 +455,12 @@ def rule9_interview_eval(records):
             continue
         try:
             transcript = fs.read_doc_content(m.group(1))
-        except Exception as e:
-            log.warning(f"规则⑨ {name} 逐字稿读取失败: {e}")
-            continue
+        except Exception:
+            try:  # wiki 链接:先换 obj_token 再读
+                transcript = fs.read_doc_content(fs.wiki_obj_token(m.group(1)))
+            except Exception as e:
+                log.warning(f"规则⑨ {name} 逐字稿读取失败: {e}")
+                continue
         if len(transcript.strip()) < 200:
             log.warning(f"规则⑨ {name} 逐字稿内容过短({len(transcript)}字),跳过")
             evaled[rid] = link
@@ -503,7 +506,7 @@ def rule9_interview_eval(records):
 
 
 import re as _re_mod
-_RE_DOC = _re_mod.compile(r"/(?:docx|docs)/([A-Za-z0-9]{20,})")
+_RE_DOC = _re_mod.compile(r"/(?:docx|docs|wiki)/([A-Za-z0-9]{20,})")
 
 
 def rule4_position_correction(records):

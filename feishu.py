@@ -130,6 +130,14 @@ class Feishu:
                 return r.content
         return self.download_media(att["file_token"])
 
+    def wiki_obj_token(self, node_token):
+        """wiki 节点 token → 实际文档 obj_token(wiki 链接读内容要先换)。"""
+        r = requests.get(f"{BASE}/wiki/v2/spaces/get_node", headers=self._h(),
+                         params={"token": node_token}, timeout=20).json()
+        if r.get("code") != 0:
+            raise RuntimeError(f"wiki_node: {r.get('code')} {r.get('msg')}")
+        return r["data"]["node"]["obj_token"]
+
     def read_doc_content(self, doc_id):
         """读一篇 docx 的纯文本内容。"""
         r = requests.get(f"{BASE}/docx/v1/documents/{doc_id}/raw_content",

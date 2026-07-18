@@ -152,16 +152,16 @@ def _handover(body):
         line += f" 候选人原话:「{body['candidateReply']}」"
     upd = {"转人工": True, "触达状态": "转人工中", "备忘录": _append_memo(_cell(f.get("备忘录")), line)}
     name = _cell(f.get("姓名"))
+    if cfg.DRY_RUN:
+        log.info(f"[DRY] handover {rid}: {line}")
+        return {"ok": True, "dataId": rid}
     try:  # 群里@面试官:转人工了,去秒回工作台接手
         fs.send_group_text(cfg.REMIND_CHAT_ID,
             f"{_at_interviewer(f)}👤【转人工】候选人【{name or rid}】:{body.get('reasonText') or reason}。"
             f"表格已勾【转人工】,请到秒回工作台接手;处理完取消勾选即恢复AI。")
     except Exception as e:
         log.warning(f"转人工群通知失败: {e}")
-    if cfg.DRY_RUN:
-        log.info(f"[DRY] handover {rid}: {line}")
-    else:
-        _write_async(rid, name, upd, "handover")
+    _write_async(rid, name, upd, "handover")
     log.info(f"handover {name or rid}: {reason} {body.get('reasonText', '')[:60]}")
     return {"ok": True, "dataId": rid}
 
