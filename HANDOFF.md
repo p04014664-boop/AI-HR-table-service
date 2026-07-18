@@ -4,6 +4,12 @@
 
 ## 🟢 最新状态（2026-07-18 已上线并全自动跑通）
 
+**代码仓库**：https://github.com/p04014664-boop/AI-HR-table-service （私有，GitHub账号 p04014664-boop，gh CLI 已登录本机）。宏佳触达服务仓库：git@github.com:JhjInsist/AI-HR.git（公开），本地克隆在 `../秒聘服务-宏佳/`（服务器旧版备份在 `../秒聘服务-宏佳-服务器旧版备份/`，含 .env）。**分工铁律（玄玄定的）：所有操作表格=本服务；所有操作Mongo+对外发消息=宏佳触达服务。**
+
+**规则⑤转人工（2026-07-18新增，两端已写完）**：进度表【转人工】复选框(玄玄要建,还没建,建了自动生效)变化 → 本服务 POST 触达服务 `/handover {dataId,handover}` → 宏佳服务更新 Mongo reach_tasks.humanTakeover → 候选人消息 AI 静默不接待；取消勾选恢复AI。本服务侧已部署；**宏佳侧代码已提交进他仓库本地克隆(commit 490ada9: schema+/handover接口+onMessage拦截,tsc过)，但他服务器容器还是旧代码，endpoint 上线要他部署**——rule5 对 404/失败会warning+下轮重试，无害。
+
+**项目文档（已发句子秒聘群）**：https://juzihudong.feishu.cn/docx/EDRyduP9uo8SoGxPLkVcZdGynEg 。句子秒聘群 chat_id=`oc_8f33f2eb5afd3efb810ed338d995cf3f`，**发群用秒聘bot(cli_aad38)API直发**，句子局长bot不在此群(230001)。
+
 **部署**：Docker 容器 `aihr-table` 跑在服务器 `101.126.100.251:/opt/aihr-table-service`（与宏佳触达服务 `miaopin` 并存），句子秒聘应用身份(cli_aad38)、每30秒轮询、DRY_RUN=false 真写、不依赖任何人CC/登录。`.env`（密钥）在服务器上，改代码用 `rsync` 到该目录再 `docker build && docker run`。
 
 **应用**：句子秒聘 `cli_aad38fd84da1dbb3`（app_secret 与豆包 ARK key **不进仓库**——在服务器 `/opt/aihr-table-service/.env`，或飞书开放平台/火山方舟控制台查）。已开权限：base:record读写删、drive上传、**docx:document(应用身份)**。真进度表高级权限里给「秒聘」角色配了"可编辑"。豆包 model `doubao-seed-2-0-lite-260428`(文字+视觉)。
