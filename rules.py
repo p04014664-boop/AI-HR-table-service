@@ -470,13 +470,19 @@ def rule9_interview_eval(records):
         rubric = standards.rubric_for(fs, pos)
         prompt = (f"{shell}\n【当前岗位配置】\n{rubric or '(无专属配置,按岗位所属类别默认体系)'}\n\n"
                   f"【候选人】{name} 应聘岗位:{pos}\n【一面面试逐字稿】\n{transcript[:30000]}\n\n"
-                  f"请严格按上面「固定输出结构」输出这场一面的面评,纯文本,每个字段一行开头。")
+                  "按上面的判断原则、字段写法规范和分数规则评这场一面,但**输出改为只输出JSON**(不要别的):\n"
+                  '{"结论":"推/考虑一下/不推，XX分","一句话总结":"40-70字","优点":["一条一句,2-4条"],'
+                  '"缺点":["一条一句,2-4条"],"基本信息":"一句浓缩","求职进展":"一句","求职期望":"一句",'
+                  '"工作情况":"一句","个人情况":"一句","总分":0,'
+                  '"分项打分":[{"维度":"","得分":0,"满分":0,"简评":"一句,说清扣分原因"}],'
+                  '"补充判断":"只写有信息增量的,可空","下一轮建议":["最多3条,必须具体"]}\n'
+                  "写作要求:金字塔——结论先行;每条一句话说清,克制、不冗长,总量对齐一份简洁的面评而不是报告。")
         if cfg.DRY_RUN:
             log.info(f"[DRY] 规则⑨面后面评: {name}")
             evaled[rid] = link
             continue
         try:
-            text = doubao.ask(prompt)
+            text = doubao.parse_json(doubao.ask(prompt))
         except Exception as e:
             log.warning(f"规则⑨ {name} 打分失败: {e}")
             continue
@@ -490,7 +496,13 @@ def rule9_interview_eval(records):
                 att = f.get("简历")
                 data = fs.download_attachment(att[0]) if isinstance(att, list) and att else None
                 fname = att[0].get("name", "简历.pdf") if isinstance(att, list) and att else "简历.pdf"
-                url = mianping.generate(fs, name, pos, {}, data, fname)
+                fr = {}
+                if data:
+                    try:
+                        fr, _ = resume.extract_fields(data, fname)  # 现建文档时重解析简历,初筛才有真材料
+                    except Exception:
+                        pass
+                url = mianping.generate(fs, name, pos, fr, data, fname)
                 fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"面试评价": url})
                 did = _RE_DOC.search(url).group(1)
             where = mianping.insert_round_eval(fs, did, "一面", text)

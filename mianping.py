@@ -13,6 +13,19 @@ def _p(t):
     return {"block_type": 2, "text": {"elements": [{"text_run": {"content": t or ""}}]}}
 
 
+def _ol(t):
+    """飞书原生有序列表块(自动编号——玄玄铁律:绝不手敲序号)。"""
+    return {"block_type": 13, "ordered": {"elements": [{"text_run": {"content": t or ""}}]}}
+
+
+def _label_list(label, items):
+    """「标签:」一行 + 原生有序列表若干条。items 为空返回空列表。"""
+    items = [str(x).strip() for x in (items or []) if str(x).strip()]
+    if not items:
+        return []
+    return [_p(f"{label}：")] + [_ol(x) for x in items]
+
+
 def _block_text(b):
     """取一个块的纯文本(标题块/文本块通用)。"""
     for key in ("heading3", "heading2", "heading1", "text"):
@@ -22,37 +35,35 @@ def _block_text(b):
 
 
 def ai_section(fs, position, fields, position_hint=""):
-    """按岗位标准包给候选人打分，返回「二、AI初筛」整节的块列表(含节标题)。"""
+    """「二、AI初筛」=简历-岗位匹配检查(玄玄定的边界:只评简历上看得见的,
+    不碰沟通/逻辑/临场表现等面试观察维度,也不打分——分数留给面试)。
+    产出:约不约面的建议 + 给面试官的考察提示。"""
     summary = fields.get("简历摘要", "") or "（简历信息有限）"
     rubric = standards.rubric_for(fs, position, position_hint)
-
-    if rubric:
-        p = (
-            "你是资深招聘官。严格按下面这份【岗位评分标准】的维度和权重给候选人打分，不要用你自己的通用判断。"
-            '只输出JSON：{"各维度得分":{"维度名":分数},"总分":0,"结论":"","一票否决":"无或具体",'
-            '"亮点":"","顾虑":""}\n'
-            f"【岗位评分标准】\n{rubric}\n\n【候选人简历】\n{summary}"
-        )
-    else:
-        p = (f"你是资深招聘官，基于简历针对「{position or '所投'}」岗位做初筛，只输出JSON："
-             '{"总分":0,"结论":"","亮点":"","顾虑":""}\n' + f"简历摘要：{summary}")
+    p = (
+        "你是招聘初筛官,只看简历做「约面前检查」。注意:这是简历阶段,"
+        "你只能评估简历上有明确证据的东西(学历/毕业时间/年限/技能/项目经历/跳槽频率);"
+        "严禁评估沟通表达、逻辑思维、临场反应等只有面试才能观察的维度,严禁打分。\n"
+        f"【该岗位的用人标准(其中面试观察类维度忽略,只取简历能核对的要求)】\n{rubric or '(无专属配置,按岗位常识)'}\n"
+        f"【应聘岗位】{position or '待定'}\n【候选人简历】\n{summary}\n"
+        '只输出JSON:{"约面建议":"建议约面/待定/不建议","匹配度":"高/中/低",'
+        '"硬性门槛":["逐项核对学历/毕业时间/年限等,写符合还是不符,一条一句"],'
+        '"匹配亮点":["简历里与岗位要求对得上的证据,一条一句,最多4条"],'
+        '"风险与缺口":["简历可见的风险:经历缺口/跳槽频繁/岗位不对口等,一条一句,最多3条"],'
+        '"面试需验证":["简历看不出来、留给面试官当场考察的点,最多3条"]}'
+    )
     try:
         e = doubao.parse_json(doubao.ask(p))
     except Exception:
         e = {}
-
-    dims = e.get("各维度得分", {}) or {}
-    dim_line = "  ".join(f"{k}:{v}" for k, v in dims.items())
-    src_note = "（按岗位标准包评分）" if rubric else "（通用评分·未匹配到标准包）"
-
     blocks = [
-        _h3("二、AI 初筛" + src_note),
-        _p(f"结论：{e.get('结论', '')}"),
-        _p(f"总分：{e.get('总分', '')}      一票否决：{e.get('一票否决', '无')}"),
+        _h3("二、AI 初筛（简历-岗位匹配）"),
+        _p(f"结论：{e.get('约面建议', '')} · 匹配度：{e.get('匹配度', '')}"),
     ]
-    if dim_line:
-        blocks.append(_p(f"各维度得分：{dim_line}"))
-    blocks += [_p(f"亮点：{e.get('亮点', '')}"), _p(f"顾虑：{e.get('顾虑', '')}")]
+    blocks += _label_list("硬性门槛", e.get("硬性门槛"))
+    blocks += _label_list("匹配亮点", e.get("匹配亮点"))
+    blocks += _label_list("风险与缺口", e.get("风险与缺口"))
+    blocks += _label_list("面试需验证", e.get("面试需验证"))
     return blocks
 
 
@@ -76,8 +87,30 @@ def generate(fs, name, position, fields, resume_data=None, resume_name="简历.p
     return url
 
 
-def insert_round_eval(fs, doc_id, round_name, eval_text):
-    """把面后AI面评插进面评文档「三、面试评价」的「{round_name}:」块之后。
+def render_round_eval(e, round_name):
+    """面后AI面评 → 飞书块(排版对齐玄玄给的示例:字段一行一段,列表用原生有序列表)。"""
+    blocks = [_p(f"结论：{e.get('结论', '')}"),
+              _p(f"一句话总结：{e.get('一句话总结', '')}")]
+    blocks += _label_list("优点", e.get("优点"))
+    blocks += _label_list("缺点", e.get("缺点"))
+    for k in ("基本信息", "求职进展", "求职期望", "工作情况", "个人情况"):
+        v = str(e.get(k, "") or "").strip()
+        if v:
+            blocks.append(_p(f"{k}：{v}"))
+    dims = e.get("分项打分") or []
+    if dims:
+        blocks.append(_p(f"总分{e.get('总分', '')}分，分项打分："))
+        for d in dims[:8]:
+            blocks.append(_ol(f"{d.get('维度', '')}：{d.get('得分', '')}/{d.get('满分', '')}。{d.get('简评', '')}"))
+    v = str(e.get("补充判断", "") or "").strip()
+    if v:
+        blocks.append(_p(f"补充判断：{v}"))
+    blocks += _label_list("下一轮建议重点验证", e.get("下一轮建议"))
+    return blocks
+
+
+def insert_round_eval(fs, doc_id, round_name, eval_data):
+    """把面后AI面评(结构化dict)插进面评文档「{round_name}:」块之后,按示例排版渲染。
     找不到轮次块就追加到文档末尾(不丢内容)。返回插入位置说明。"""
     blocks = fs.doc_blocks(doc_id)
     root = next(b for b in blocks if b["block_id"] == doc_id)
@@ -89,8 +122,7 @@ def insert_round_eval(fs, doc_id, round_name, eval_text):
         if t.startswith(round_name):  # "一面：" / "一面:"
             idx = i + 1
             break
-    lines = [ln for ln in eval_text.split("\n") if ln.strip()]
-    new_blocks = [_p(f"── AI面评({round_name}) ──")] + [_p(ln.strip()) for ln in lines[:60]]
+    new_blocks = render_round_eval(eval_data, round_name)[:50]
     if idx is None:
         fs.replace_section(doc_id, len(children), len(children), new_blocks)  # 纯插入到末尾
         return "文档末尾(没找到轮次块)"
