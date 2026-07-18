@@ -34,7 +34,10 @@ def _locate(data_id, phone):
         if r:
             return r["record_id"], r["fields"]
     if phone:
-        p = re.sub(r"\D", "", str(phone))[-11:]
+        s = str(phone).strip()
+        digits = re.sub(r"\D", "", s)
+        # 联系方式栏可能是手机号也可能是微信号:纯数字按后11位清洗,微信号原样匹配
+        p = digits[-11:] if len(digits) >= 11 and digits == s.replace(" ", "").replace("-", "") else s
         if p:
             for r in fs.search_records(cfg.PROG_APP, cfg.PROG_TABLE, "联系方式", "contains", p):
                 return r["record_id"], r["fields"]

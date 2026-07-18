@@ -25,8 +25,8 @@ def cycle():
         ("链路B手动简历", lambda: rules.rule3_manual_resume(prog)),
         ("规则④岗位校正联动", lambda: rules.rule4_position_correction(prog)),
         ("规则⑤转人工同步", lambda: rules.rule5_handover(prog)),
-        ("规则⑥转人工超时提醒", lambda: rules.rule6_handover_overdue(prog)),
-        ("规则⑦轮次推进", lambda: rules.rule7_rounds(prog)),
+        # 规则⑥(转人工超时提醒)已按玄玄决定取消:转人工后去秒回工作台看消息即可
+        # 规则⑦(轮次推进/自动约二面三面)已实现但暂停启用,等玄玄按场景聊完再开
         ("规则⑧改期联动", lambda: rules.rule8_time_change(prog)),
     ]
     for label, fn in steps:

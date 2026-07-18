@@ -150,38 +150,59 @@ def _remind(text):
 _REACH_REQUIRED = ["联系方式", "岗位", "一面时间", "一面面试官"]
 
 
+def _is_phone(s):
+    import re as _re
+    return bool(_re.fullmatch(r"1[3-9]\d{9}", _re.sub(r"[\s-]", "", s or "")))
+
+
 def _invite(rid, f, round_name):
-    """调触达服务发起某一轮的约面邀约。首轮=加好友+邀约;后续轮=同号重触达(老好友直接收新邀约)。"""
+    """调触达服务发起某一轮的约面邀约。首轮=加好友+邀约;后续轮=同号重触达(老好友直接收新邀约)。
+    联系方式栏语义(玄玄定)=「能联系上他的微信号」:默认手机号=微信号;人工校正后可能填的是微信号。
+    是手机号→走 phone;不是→当微信号,phone 原样带 + wxid 字段(中台按类型选加友方式)。"""
+    contact = _cell(f.get("联系方式")).strip()
     payload = {
         "dataId": rid,
-        "phone": _cell(f.get("联系方式")),
+        "phone": contact,
         "name": _cell(f.get("姓名")),
         "position": _cell(f.get("岗位")),
         "interviewer": _cell(f.get(f"{round_name}面试官")),
         "interviewTime": str(f.get(f"{round_name}时间") or ""),  # 传毫秒字符串,宏佳侧parseInterviewTime认13位
         "round": round_name,  # 中台暂未用,先带上,话术分轮次时就有了
     }
+    if not _is_phone(contact):
+        payload["wxid"] = contact  # 微信号加友,等中台支持
     requests.post(f"{cfg.REACH_URL}/reach", json=payload, timeout=30)
 
 
 def rule2_reach(records):
     """规则②：进度表【AI触达】勾选 → 前置自检必填信息 → 齐了才调触达服务加企微好友。
     缺信息：不触达，去群里@点勾选的人(或一面面试官)报缺什么；补齐后下一轮自动触达。
-    幂等：reached 按记录ID只触达一次；同一记录同一缺项组合只提醒一次(缺项变化会再提醒)。"""
+    重触达(玄玄定的场景)：加不上好友→HR人工校正联系方式(可能填成微信号)→
+      ①联系方式变了且仍勾着 → 自动重新触达新号；②取消勾选再勾 → 也重新触达。
+    幂等：reached 记 {记录ID: 触达时的联系方式}；同缺项组合只提醒一次。"""
     state = _load_state()
-    reached = set(state["reached"])
+    reached = state.get("reached")
+    if isinstance(reached, list):  # 老格式(纯ID列表)迁移:联系方式记空=不知道,变化检测从下次起效
+        reached = {rid: "" for rid in reached}
+    state["reached"] = reached = reached or {}
     reminded = state.setdefault("reminded", {})
     invited = state.setdefault("round_invited", {})
     known_time = state.setdefault("known_time", {})
     done = 0
     for r in records:
         f = r["fields"]
+        rid = r["record_id"]
         checked = f.get("AI触达") or f.get("AI触答")  # 兼容"触答"笔误字段名
         if not checked:
+            if rid in reached:
+                reached.pop(rid, None)  # 取消勾选=撤销授权;再勾=重新触达
             continue
-        rid = r["record_id"]
+        contact_now = _cell(f.get("联系方式")).strip()
         if rid in reached:
-            continue
+            prev = reached[rid]
+            if not prev or prev == contact_now or not contact_now:
+                continue  # 已触达且号没变(或老数据没记号) → 不重复
+            log.info(f"规则② {_cell(f.get('姓名'))} 联系方式已人工校正({prev}→{contact_now}),重新触达")
         name = _cell(f.get("姓名"))
 
         # ── 前置自检:该有的信息不齐就不触达,先@人补 ──
@@ -214,12 +235,11 @@ def rule2_reach(records):
             except Exception as e:
                 log.warning(f"  {name} 触达调用失败: {e}")
                 continue
-        reached.add(rid)
+        reached[rid] = contact_now
         invited[rid] = "一面"
         known_time[rid] = f.get("一面时间")
         reminded.pop(rid, None)
         done += 1
-    state["reached"] = list(reached)
     _save_state(state)
     return done
 
@@ -268,42 +288,6 @@ def rule5_handover(records):
             except Exception as e:
                 log.warning(f"  规则⑤ {name} 调触达服务失败: {e}，下轮重试")
                 continue
-        done += 1
-    _save_state(state)
-    return done
-
-
-def rule6_handover_overdue(records):
-    """规则⑥：转人工超过24小时还没取消 → 群里@人提醒一次(防止HR处理完忘了恢复AI,候选人被晾着)。"""
-    import time as _t
-    state = _load_state()
-    at_map = state.setdefault("handover_at", {})
-    reminded = state.setdefault("handover_reminded", {})
-    done = 0
-    for r in records:
-        rid = r["record_id"]
-        f = r["fields"]
-        if not f.get("转人工"):
-            at_map.pop(rid, None)
-            reminded.pop(rid, None)
-            continue
-        if rid not in at_map:
-            at_map[rid] = _t.time()  # 首次见到勾选,起表
-            continue
-        if _t.time() - at_map[rid] < 24 * 3600 or rid in reminded:
-            continue
-        name = _cell(f.get("姓名"))
-        msg = f"{_at_of(r, f)}候选人【{name or rid}】转人工已超过24小时。处理完了记得取消勾选恢复AI接待,别把候选人晾着~"
-        if cfg.DRY_RUN:
-            log.info(f"[DRY] 规则⑥转人工超时提醒: {name}")
-        else:
-            try:
-                _remind(msg)
-                log.info(f"规则⑥ {name} 转人工超24h,已提醒")
-            except Exception as e:
-                log.warning(f"  {name} 转人工超时提醒失败: {e}")
-                continue
-        reminded[rid] = _t.time()
         done += 1
     _save_state(state)
     return done
