@@ -387,15 +387,24 @@ def rule8_time_change(records):
             continue
         name = _cell(f.get("姓名"))
         if cfg.DRY_RUN:
-            log.info(f"[DRY] 规则⑧改期重邀: {name} {rnd} {old}→{cur}")
+            log.info(f"[DRY] 规则⑧改期: {name} {rnd} {old}→{cur}")
         else:
             try:
-                _invite(rid, f, rnd)
+                # 优先直推新时间(已绑定会话秒到);还没聊过绑不上会话 → 退回重触达
+                resp = requests.post(f"{cfg.REACH_URL}/notify",
+                                     json={"dataId": rid, "phone": _cell(f.get("联系方式")).strip(),
+                                           "interviewTime": str(cur), "round": rnd}, timeout=30)
+                j = resp.json() if resp.ok else {}
+                if j.get("ok"):
+                    way = "已直接推送给候选人确认"
+                else:
+                    _invite(rid, f, rnd)
+                    way = "候选人还没会话,已走重触达通知"
                 fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"触达状态": "已发邀约"})
-                _remind(f"候选人【{name}】的{rnd}时间已改,新邀约已自动发给候选人确认。")
-                log.info(f"规则⑧ {name} {rnd}改期重邀已发起")
+                _remind(f"候选人【{name}】的{rnd}时间已改,{way}。")
+                log.info(f"规则⑧ {name} {rnd}改期通知({way})")
             except Exception as e:
-                log.warning(f"  {name} 改期重邀失败: {e}")
+                log.warning(f"  {name} 改期通知失败: {e}")
                 continue
         known_time[rid] = cur
         done += 1
