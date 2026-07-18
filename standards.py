@@ -11,6 +11,8 @@ _cache_at = 0
 # 标准岗位字段值 → 用于匹配配置标题的关键词
 _KEYS = ["前端", "后端", "运维", "测试", "产品", "UI", "售前", "售后",
          "销售", "FDE", "管培生", "出海", "HR", "行政", "财务", "IP"]
+# 岗位关键词 ≠ 配置标题用词时的别名(如岗位叫 HR、配置叫「人力资源管理专员」)
+_ALIAS = {"HR": ["HR", "人力"], "IP": ["IP", "内容助理"]}
 
 
 def _load(fs):
@@ -43,7 +45,8 @@ def rubric_for(fs, position, hint=""):
         or next((k for k in _KEYS if k in (hint or "")), None)
     if not pk:
         return ""
-    matches = [(h, t) for h, t in cfgs.items() if pk in h]
+    keys = _ALIAS.get(pk, [pk])
+    matches = [(h, t) for h, t in cfgs.items() if any(k in h for k in keys)]
     if not matches:
         return ""
     if len(matches) > 1:  # 同一岗位多方向：按线索里的方向词二选一(市场/技术/出海/政务)
