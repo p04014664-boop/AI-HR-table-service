@@ -4,7 +4,7 @@
 
 ## 🟢 最新状态（2026-07-18 已上线并全自动跑通）
 
-**代码仓库**：https://github.com/p04014664-boop/AI-HR-table-service （私有，GitHub账号 p04014664-boop，gh CLI 已登录本机）。宏佳触达服务仓库：git@github.com:JhjInsist/AI-HR.git（公开），本地克隆在 `../秒聘服务-宏佳/`（服务器旧版备份在 `../秒聘服务-宏佳-服务器旧版备份/`，含 .env）。**分工铁律（玄玄定的）：所有操作表格=本服务；所有操作Mongo+对外发消息=宏佳触达服务。**
+**代码仓库**：https://github.com/p04014664-boop/AI-HR-table-service （**公开**——玄玄拍板，公开前已抹服务器IP；GitHub账号 p04014664-boop，gh CLI 已登录本机）。宏佳触达服务仓库：git@github.com:JhjInsist/AI-HR.git（公开），本地克隆在 `../秒聘服务-宏佳/`（服务器旧版备份在 `../秒聘服务-宏佳-服务器旧版备份/`，含 .env）。**分工铁律（玄玄定的）：所有操作表格=本服务；所有操作Mongo+对外发消息=宏佳触达服务。**
 
 **规则⑤转人工（2026-07-18新增，两端已写完）**：进度表【转人工】复选框(玄玄要建,还没建,建了自动生效)变化 → 本服务 POST 触达服务 `/handover {dataId,handover}` → 宏佳服务更新 Mongo reach_tasks.humanTakeover → 候选人消息 AI 静默不接待；取消勾选恢复AI。本服务侧已部署；**宏佳侧代码已提交进他仓库本地克隆(commit 490ada9: schema+/handover接口+onMessage拦截,tsc过)，但他服务器容器还是旧代码，endpoint 上线要他部署**——rule5 对 404/失败会warning+下轮重试，无害。
 
