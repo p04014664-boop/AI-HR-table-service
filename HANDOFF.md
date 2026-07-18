@@ -8,6 +8,8 @@
 
 **⭐触达前置自检(2026-07-18晚·玄玄E2E实测后定的规则,已实现部署)**：勾【AI触达】≠立即触达。rule2 先自检 `_REACH_REQUIRED=[联系方式,岗位,一面时间,一面面试官]`，缺任何一项→**不触达**，秒聘bot去句子秒聘群 `<at>` 点勾选的人(last_modified_by,兜底@一面面试官)报"缺什么"，补齐后下轮自动触达。同记录同缺项组合只提醒一次(state.reminded,缺项变化重新提醒)。**背景**：玄玄本人E2E时没填一面时间就触达了,AI欢迎语发"(时间待定)"很尴尬。E2E还发现:接口提速(全表扫→单条直查+search,15s→亚秒,写表异步)、HR岗位匹配不上"人力资源管理专员"配置(加了_ALIAS)、按人力标准包玄玄简历56分vs通用虚高90分。**测试数据已回滚**(删测试行+测试面评doc)。宏佳侧遗留:mh回调有一类"未识别类型"(加好友结果没落库,他侧小缺口);玄玄测试触达的Mongo task在他库里(不碍事,重测会建新task)。
 
+**⭐全局方案已出(2026-07-18深夜,玄玄休息前布置)**：全盘体检+下一步方案文档 → 本目录`全局方案-下一步.md` + 飞书 https://juzihudong.feishu.cn/docx/Hh40doGqOo7MpyxhGT1cVawznff 。**等玄玄拍板3件事:①催宏佳合PR#2 ②建「触达状态」单选字段 ③二面三面是否首轮授权后自动**。深夜体检:反向转人工全链路验证通(接口→Mongo双向)、修掉rule5把NestJS 201当失败无限重试的bug(周子杰那条重试84次)、白名单完整(synced74)、日志清零。**玄玄的AI约面测试行已被同事清掉,表里只剩他的在职员工记录(绝不能碰)**;他的Mongo触达任务仍未绑wxid(二次触达bug未修,宏佳线上代码=旧onFriendConfirm,已验证编译产物,他说"做的是一件事"不成立,PR#2保留)。
+
 **联调状态(2026-07-18晚)**：宏佳已完成触达服务去表格化并部署;我方已群发三件事就绪+base URL `http://aihr-table:8090`(他配 TABLE_SERVICE_URL 即联调);反向转人工(HR勾框→停AI)已提 **PR https://github.com/JhjInsist/AI-HR/pull/1**(fork p04014664-boop/AI-HR,分支handover-endpoint),等他合+部署。**待对齐分歧:/reach 触发=勾AI触达(玄玄定)vs 一面信息就绪(宏佳文档),已在群里提出。**
 
 **⭐服务间接口（2026-07-18晚,已上线互通）**：按宏佳定的 `秒聘服务-宏佳/docs/触达服务接口文档.md` 实现了表格服务侧 HTTP 接口(api.py, 端口8090)：`POST /progress/backfill`(回填备忘录/一面时间,dataId定位、phone兜底) + `POST /progress/handover`(AI判定转人工→置【转人工】=是+备忘录记原因) + `/health`。容器加入宏佳建的 docker 网络 **`aihr-net`**，他的服务调 **`http://aihr-table:8090`**(容器内实测通)；宿主机调 127.0.0.1:8090。规则② `/reach` 入参已对齐契约{dataId,phone,name,position,interviewer,interviewTime}(触发仍按玄玄定的勾【AI触达】,非宏佳文档写的"一面信息就绪")。**转人工双向**：HR勾框→rule5→宏佳/handover→Mongo停AI；AI自判→宏佳调我/progress/handover→我置框=是(rule5回声同步Mongo,幂等收敛不成环)。进度表【转人工】复选框玄玄已建,rule5已在盯。
