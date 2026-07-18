@@ -128,28 +128,58 @@ def rule1_sync():
     return done
 
 
+# 触达前必须齐的信息(玄玄定的:勾了AI触达≠直接触达,缺信息先@人补齐)
+_REACH_REQUIRED = ["联系方式", "岗位", "一面时间", "一面面试官"]
+
+
 def rule2_reach():
-    """规则②：进度表【AI触达】勾选 → 调触达服务加企微好友。幂等(按记录ID)。"""
+    """规则②：进度表【AI触达】勾选 → 前置自检必填信息 → 齐了才调触达服务加企微好友。
+    缺信息：不触达，去群里@点勾选的人(或一面面试官)报缺什么；补齐后下一轮自动触达。
+    幂等：reached 按记录ID只触达一次；同一记录同一缺项组合只提醒一次(缺项变化会再提醒)。"""
     state = _load_state()
     reached = set(state["reached"])
-    records = fs.list_records(cfg.PROG_APP, cfg.PROG_TABLE)
+    reminded = state.setdefault("reminded", {})
+    records = fs.list_records(cfg.PROG_APP, cfg.PROG_TABLE, automatic_fields=True)
     done = 0
     for r in records:
         f = r["fields"]
         checked = f.get("AI触达") or f.get("AI触答")  # 兼容"触答"笔误字段名
         if not checked:
             continue
-        if r["record_id"] in reached:
+        rid = r["record_id"]
+        if rid in reached:
             continue
         name = _cell(f.get("姓名"))
-        phone = _cell(f.get("联系方式"))
-        if not phone:
-            log.info(f"  {name} 勾了AI触达但无手机号，跳过(等补录)")
+
+        # ── 前置自检:该有的信息不齐就不触达,先@人补 ──
+        missing = [k for k in _REACH_REQUIRED if not (_cell(f.get(k)) or f.get(k))]
+        if missing:
+            sig = ",".join(missing)
+            if reminded.get(rid) != sig:
+                # @谁:优先点勾选的人(last_modified_by),没有就@一面面试官,都没有只报名字
+                at_id = (r.get("last_modified_by") or {}).get("id")
+                if not at_id:
+                    iv = f.get("一面面试官")
+                    at_id = iv[0].get("id") if isinstance(iv, list) and iv else None
+                at = f'<at user_id="{at_id}"></at> ' if at_id else ""
+                msg = (f"{at}候选人【{name or rid}】勾了AI触达，但还缺：{('、'.join(missing))}。"
+                       f"补齐后我会自动发起触达~")
+                if cfg.DRY_RUN:
+                    log.info(f"[DRY] 规则②缺信息提醒: {msg}")
+                else:
+                    try:
+                        fs.send_group_text(cfg.REMIND_CHAT_ID, msg)
+                        log.info(f"规则② {name} 缺{sig}，已群内提醒")
+                    except Exception as e:
+                        log.warning(f"  {name} 缺信息提醒发送失败: {e}")
+                        continue  # 提醒没发出去,下轮重试
+                reminded[rid] = sig
             continue
-        # 入参按 docs/触达服务接口文档.md 2.1：dataId 用于回填/转人工回调定位
+
+        # ── 信息齐了 → 触达。入参按 docs/触达服务接口文档.md 2.1 ──
         payload = {
-            "dataId": r["record_id"],
-            "phone": phone,
+            "dataId": rid,
+            "phone": _cell(f.get("联系方式")),
             "name": name,
             "position": _cell(f.get("岗位")),
             "interviewer": _cell(f.get("一面面试官")),
@@ -164,7 +194,8 @@ def rule2_reach():
             except Exception as e:
                 log.warning(f"  {name} 触达调用失败: {e}")
                 continue
-        reached.add(r["record_id"])
+        reached.add(rid)
+        reminded.pop(rid, None)
         done += 1
     state["reached"] = list(reached)
     _save_state(state)

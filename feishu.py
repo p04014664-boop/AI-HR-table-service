@@ -216,6 +216,18 @@ class Feishu:
         if w.get("code") != 0:
             raise RuntimeError(f"插节: {w.get('code')} {w.get('msg')}")
 
+    def send_group_text(self, chat_id, text):
+        """以本应用机器人身份往群里发文本(支持 <at user_id=\"ou_xxx\"></at> @人)。"""
+        import json as _json
+        r = requests.post(
+            f"{BASE}/im/v1/messages", params={"receive_id_type": "chat_id"},
+            headers=self._h(),
+            json={"receive_id": chat_id, "msg_type": "text",
+                  "content": _json.dumps({"text": text})}, timeout=20,
+        ).json()
+        if r.get("code") != 0:
+            raise RuntimeError(f"发群消息: {r.get('code')} {r.get('msg')}")
+
     def set_doc_org_editable(self, doc_id):
         """把 docx 设为「组织内可编辑」——应用建的文档默认只有应用是 owner，
         HR 打不开也改不了，放开后公司同事拿到链接就能编辑。"""

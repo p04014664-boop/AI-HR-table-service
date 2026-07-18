@@ -30,6 +30,9 @@ class Config:
     # 触达服务（宏佳）
     REACH_URL = os.environ.get("REACH_SERVICE_URL", "http://ai-hr.juzibot.com")
 
+    # 触达前置校验缺信息时,去这个群@相关人提醒(默认=句子秒聘群)
+    REMIND_CHAT_ID = os.environ.get("REMIND_CHAT_ID", "oc_8f33f2eb5afd3efb810ed338d995cf3f")
+
     # 对外 HTTP 接口端口(触达服务回调 /progress/backfill /progress/handover)
     API_PORT = int(os.environ.get("API_PORT", "8090"))
 
