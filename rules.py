@@ -167,7 +167,8 @@ def _invite(rid, f, round_name):
         "position": _cell(f.get("岗位")),
         "interviewer": _cell(f.get(f"{round_name}面试官")),
         "interviewTime": str(f.get(f"{round_name}时间") or ""),  # 传毫秒字符串,宏佳侧parseInterviewTime认13位
-        "round": round_name,  # 中台暂未用,先带上,话术分轮次时就有了
+        "round": round_name,
+        "evalDoc": _cell(f.get("面试评价")),  # 面评链接:建日程时放进日程描述给面试官
     }
     if not _is_phone(contact):
         payload["wxid"] = contact  # 微信号加友,等中台支持

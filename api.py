@@ -89,6 +89,12 @@ _STATUS_MAP = {
 }
 
 
+def _at_interviewer(f):
+    iv = f.get("一面面试官")
+    at_id = iv[0].get("id") if isinstance(iv, list) and iv else None
+    return f'<at user_id="{at_id}"></at> ' if at_id else ""
+
+
 def _backfill(body):
     rid, f = _locate(body.get("dataId"), body.get("phone"))
     if not rid:
@@ -106,15 +112,27 @@ def _backfill(body):
     # 候选人给出了期望的改期时间 → 置"要改期" + 群里@一面面试官拍板(改一面时间=拍板,规则⑧自动通知候选人)
     if body.get("expectTime"):
         upd["触达状态"] = "要改期"
-        iv = f.get("一面面试官")
-        at_id = iv[0].get("id") if isinstance(iv, list) and iv else None
-        at = f'<at user_id="{at_id}"></at> ' if at_id else ""
         try:
             fs.send_group_text(cfg.REMIND_CHAT_ID,
-                f"{at}候选人【{_cell(f.get('姓名')) or rid}】期望把面试改到【{body['expectTime']}】。"
+                f"{_at_interviewer(f)}候选人【{_cell(f.get('姓名')) or rid}】期望把面试改到【{body['expectTime']}】。"
                 f"同意就把表格里的一面时间改成它;不方便就改成你方便的时间。改完我会自动通知候选人确认~")
         except Exception as e:
             log.warning(f"改期拍板提醒发送失败: {e}")
+    # 双方约成(候选人确认时间) → 勾【X面】复选框(=双方达成一致) + 群里@面试官报喜
+    ev = (body.get("status") or body.get("event") or "").upper()
+    if "INTENT_ACCEPT" in ev or ev == "SCHEDULE_OK":
+        rd = body.get("round") or "一面"
+        if rd in ("一面", "二面", "三面"):
+            upd[rd] = True
+        t = _parse_time_ms(body.get("interviewTime"))
+        when = datetime.fromtimestamp(t / 1000, _CST).strftime("%m月%d日 %H:%M") if t else ""
+        link = f" 会议链接:{body['meetingLink']}" if body.get("meetingLink") else ""
+        try:
+            fs.send_group_text(cfg.REMIND_CHAT_ID,
+                f"{_at_interviewer(f)}✅【{rd}约成】候选人【{_cell(f.get('姓名')) or rid}】已确认{rd}时间"
+                f"{('【' + when + '】') if when else ''}。日程已建、面评在日程描述里。{link}")
+        except Exception as e:
+            log.warning(f"约成通知发送失败: {e}")
     name = _cell(f.get("姓名"))
     if cfg.DRY_RUN:
         log.info(f"[DRY] backfill {rid}: {json.dumps(upd, ensure_ascii=False)[:150]}")
@@ -134,6 +152,12 @@ def _handover(body):
         line += f" 候选人原话:「{body['candidateReply']}」"
     upd = {"转人工": True, "触达状态": "转人工中", "备忘录": _append_memo(_cell(f.get("备忘录")), line)}
     name = _cell(f.get("姓名"))
+    try:  # 群里@面试官:转人工了,去秒回工作台接手
+        fs.send_group_text(cfg.REMIND_CHAT_ID,
+            f"{_at_interviewer(f)}👤【转人工】候选人【{name or rid}】:{body.get('reasonText') or reason}。"
+            f"表格已勾【转人工】,请到秒回工作台接手;处理完取消勾选即恢复AI。")
+    except Exception as e:
+        log.warning(f"转人工群通知失败: {e}")
     if cfg.DRY_RUN:
         log.info(f"[DRY] handover {rid}: {line}")
     else:
