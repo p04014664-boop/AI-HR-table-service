@@ -76,6 +76,28 @@ def generate(fs, name, position, fields, resume_data=None, resume_name="简历.p
     return url
 
 
+def insert_round_eval(fs, doc_id, round_name, eval_text):
+    """把面后AI面评插进面评文档「三、面试评价」的「{round_name}:」块之后。
+    找不到轮次块就追加到文档末尾(不丢内容)。返回插入位置说明。"""
+    blocks = fs.doc_blocks(doc_id)
+    root = next(b for b in blocks if b["block_id"] == doc_id)
+    children = root.get("children", [])
+    by_id = {b["block_id"]: b for b in blocks}
+    idx = None
+    for i, cid in enumerate(children):
+        t = _block_text(by_id.get(cid, {})).strip()
+        if t.startswith(round_name):  # "一面：" / "一面:"
+            idx = i + 1
+            break
+    lines = [ln for ln in eval_text.split("\n") if ln.strip()]
+    new_blocks = [_p(f"── AI面评({round_name}) ──")] + [_p(ln.strip()) for ln in lines[:60]]
+    if idx is None:
+        fs.replace_section(doc_id, len(children), len(children), new_blocks)  # 纯插入到末尾
+        return "文档末尾(没找到轮次块)"
+    fs.replace_section(doc_id, idx, idx, new_blocks)  # start==end → 纯插入
+    return f"「{round_name}」之后"
+
+
 def resync(fs, doc_id, name, position, fields, position_hint=""):
     """HR 人工校正岗位后联动面评：改标题 + 只重写「二、AI初筛」节(按新岗位标准包重打分)。
     「一、简历」(嵌的原始文件)和「三、面试评价」(HR手写)整段不碰。"""

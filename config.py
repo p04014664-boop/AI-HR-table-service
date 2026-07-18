@@ -36,6 +36,9 @@ class Config:
     # 对外 HTTP 接口端口(触达服务回调 /progress/backfill /progress/handover)
     API_PORT = int(os.environ.get("API_PORT", "8090"))
 
+    # 候选人FAQ知识库数据表(同 PROG_APP 这个 base;/kb 接口实时读它喂给触达对话)
+    KB_TABLE = os.environ.get("KB_TABLE_ID", "tblogUqdG4hxuZ9f")
+
     POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL_SEC", "120"))
     # DRY_RUN=true 只识别打日志、不真写表/不真触达。切生产前务必先演练。
     DRY_RUN = _bool(os.environ.get("DRY_RUN", "true"), True)

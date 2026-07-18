@@ -24,9 +24,20 @@ def _load(fs):
         for chunk in re.split(r"【岗位配置\s*\d+[:：]", content)[1:]:
             header = chunk.split("】")[0].strip()
             cfgs[header] = chunk[:2000]
-        _cache = cfgs
+        m = re.search(r"【岗位配置\s*1[:：]", content)
+        head = content[:m.start()] if m else content[:9000]
+        _cache = {"cfgs": cfgs, "shell": head}
         _cache_at = time.time()
     return _cache
+
+
+def prompt_shell(fs):
+    """面评Prompt的通用壳(任务目标/身份/风格/分数规则/固定输出结构/工作流程),
+    即知识库文档「十一、岗位配置表」之前的全部——面后面评按它的格式输出,玄玄改文档自动生效。"""
+    try:
+        return _load(fs)["shell"]
+    except Exception:
+        return ""
 
 
 def rubric_for(fs, position, hint=""):
@@ -37,7 +48,7 @@ def rubric_for(fs, position, hint=""):
     if not text:
         return ""
     try:
-        cfgs = _load(fs)
+        cfgs = _load(fs)["cfgs"]
     except Exception:
         return ""
     # 岗位字段优先定配置(HR校正过的岗位说了算)，岗位空/没命中才用文件名线索兜底

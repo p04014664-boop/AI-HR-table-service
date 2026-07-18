@@ -166,6 +166,41 @@ def _handover(body):
     return {"ok": True, "dataId": rid}
 
 
+# ── 候选人FAQ知识库(飞书表=单一真源,HR改表2分钟内生效) ──
+_KB_TTL = 120
+_kb_cache = {"text": "", "at": 0.0}
+
+
+def _load_kb():
+    """从进度表 base 的「候选人FAQ知识库」数据表实时拼知识库文本(启用=true),120s 缓存。"""
+    import time as _t
+    if _kb_cache["text"] and _t.time() - _kb_cache["at"] < _KB_TTL:
+        return _kb_cache["text"]
+    rows = fs.list_records(cfg.PROG_APP, cfg.KB_TABLE)
+    buckets = {"红线": [], "口径": [], "语气": [], "问答": []}
+    for r in rows:
+        f = r["fields"]
+        if not f.get("启用"):
+            continue
+        q, a = _cell(f.get("问题")), _cell(f.get("答案"))
+        t = _cell(f.get("类型")) or "问答"
+        if not a:
+            continue
+        buckets.setdefault(t, []).append((q, a))
+    parts = []
+    if buckets["红线"]:
+        parts.append("【红线(绝对不能违反)】\n" + "\n".join(f"- {a}" for _, a in buckets["红线"]))
+    if buckets["口径"]:
+        parts.append("【对外口径】\n" + "\n".join(f"- {a}" for _, a in buckets["口径"]))
+    if buckets["语气"]:
+        parts.append("【语气与风格】\n" + "\n".join(a for _, a in buckets["语气"]))
+    if buckets["问答"]:
+        parts.append("【常见问答】\n" + "\n".join(f"Q:{q}\nA:{a}" for q, a in buckets["问答"]))
+    text = "\n\n".join(parts)
+    _kb_cache.update(text=text, at=_t.time())
+    return text
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # 静音默认访问日志,统一走 logging
         pass
@@ -181,6 +216,11 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.rstrip("/") in ("", "/health"):
             return self._send(200, {"ok": True, "service": "aihr-table", "dry_run": cfg.DRY_RUN})
+        if self.path.rstrip("/") == "/kb":
+            try:
+                return self._send(200, {"ok": True, "kb": _load_kb()})
+            except Exception as e:
+                return self._send(500, {"ok": False, "msg": str(e)})
         return self._send(404, {"ok": False, "msg": "not found"})
 
     def do_POST(self):

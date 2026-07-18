@@ -204,12 +204,14 @@ class Feishu:
         return out
 
     def replace_section(self, doc_id, start_index, end_index, new_blocks):
-        """把根节点 children 的 [start,end) 区间整段换成 new_blocks(用于重写面评的AI初筛节)。"""
-        r = requests.delete(f"{BASE}/docx/v1/documents/{doc_id}/blocks/{doc_id}/children/batch_delete",
-                            headers=self._h(),
-                            json={"start_index": start_index, "end_index": end_index}, timeout=30).json()
-        if r.get("code") != 0:
-            raise RuntimeError(f"删节: {r.get('code')} {r.get('msg')}")
+        """把根节点 children 的 [start,end) 区间整段换成 new_blocks(用于重写面评的AI初筛节)。
+        start==end 时是纯插入,不做删除。"""
+        if end_index > start_index:
+            r = requests.delete(f"{BASE}/docx/v1/documents/{doc_id}/blocks/{doc_id}/children/batch_delete",
+                                headers=self._h(),
+                                json={"start_index": start_index, "end_index": end_index}, timeout=30).json()
+            if r.get("code") != 0:
+                raise RuntimeError(f"删节: {r.get('code')} {r.get('msg')}")
         w = requests.post(f"{BASE}/docx/v1/documents/{doc_id}/blocks/{doc_id}/children",
                           headers=self._h(),
                           json={"index": start_index, "children": new_blocks}, timeout=30).json()

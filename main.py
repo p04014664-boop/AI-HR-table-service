@@ -28,6 +28,7 @@ def cycle():
         # 规则⑥(转人工超时提醒)已按玄玄决定取消:转人工后去秒回工作台看消息即可
         # 规则⑦(轮次推进/自动约二面三面)已实现但暂停启用,等玄玄按场景聊完再开
         ("规则⑧改期联动", lambda: rules.rule8_time_change(prog)),
+        ("规则⑨面后面评", lambda: rules.rule9_interview_eval(prog)),
     ]
     for label, fn in steps:
         try:

@@ -11,7 +11,7 @@ def _chat(messages):
     r = requests.post(
         ARK,
         headers={"Authorization": f"Bearer {cfg.ARK_API_KEY}", "Content-Type": "application/json"},
-        json={"model": cfg.ARK_MODEL, "messages": messages, "temperature": 0.0},
+        json={"model": cfg.ARK_MODEL, "messages": messages, "temperature": 0.0, "max_tokens": 4096},
         timeout=90,
     ).json()
     return r["choices"][0]["message"]["content"].strip()

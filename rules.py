@@ -413,6 +413,98 @@ def rule8_time_change(records):
     return done
 
 
+def rule9_interview_eval(records):
+    """规则⑨(面后AI面评,玄玄拍板的流程)：HR 往【逐字稿链接】贴面试逐字稿文档链接 →
+    读逐字稿 → 用知识库面评Prompt(壳=固定输出结构+分数规则,实时读)+该岗位标准包打分 →
+    写进该候选人面评文档「三、面试评价」的「一面：」下面 → 群里@一面面试官补人工结论。
+    幂等:state.evaled 记 {rid: 链接},链接没变不重评;换链接(如更正)会重评。
+    ⭐存量铁律(玄玄定,两次教训):新规则上线,表里已有的数据一律视为已处理,只管之后新增/变化的。"""
+    state = _load_state()
+    evaled = state.setdefault("evaled", {})
+    if not state.get("evaled_seeded"):
+        # 首次运行:把所有已有逐字稿链接的行全部登记为已处理,零动作(存量是以前人工处理完的)
+        n = 0
+        for r in records:
+            link = _cell(r["fields"].get("逐字稿链接")).strip()
+            if link:
+                evaled[r["record_id"]] = link
+                n += 1
+        state["evaled_seeded"] = True
+        _save_state(state)
+        log.info(f"规则⑨首启:预置存量逐字稿 {n} 条为已处理(不动作),只管之后新增")
+        return 0
+    done = 0
+    for r in records:
+        rid = r["record_id"]
+        f = r["fields"]
+        link = _cell(f.get("逐字稿链接")).strip()
+        if not link or evaled.get(rid) == link:
+            continue
+        name, pos = _cell(f.get("姓名")), _cell(f.get("岗位"))
+        m = _RE_DOC.search(link)
+        if not m:
+            if evaled.get(rid) != f"BAD:{link}":
+                try:
+                    _remind(f"{_at_of(r, f)}候选人【{name}】的逐字稿链接我读不了(要飞书文档链接,妙记页面链接不行)。"
+                            f"请打开妙记里的「文字记录」文档,把那个文档的链接贴进来~")
+                except Exception:
+                    pass
+                evaled[rid] = f"BAD:{link}"
+                _save_state(state)
+            continue
+        try:
+            transcript = fs.read_doc_content(m.group(1))
+        except Exception as e:
+            log.warning(f"规则⑨ {name} 逐字稿读取失败: {e}")
+            continue
+        if len(transcript.strip()) < 200:
+            log.warning(f"规则⑨ {name} 逐字稿内容过短({len(transcript)}字),跳过")
+            evaled[rid] = link
+            _save_state(state)
+            continue
+        shell = standards.prompt_shell(fs)
+        rubric = standards.rubric_for(fs, pos)
+        prompt = (f"{shell}\n【当前岗位配置】\n{rubric or '(无专属配置,按岗位所属类别默认体系)'}\n\n"
+                  f"【候选人】{name} 应聘岗位:{pos}\n【一面面试逐字稿】\n{transcript[:30000]}\n\n"
+                  f"请严格按上面「固定输出结构」输出这场一面的面评,纯文本,每个字段一行开头。")
+        if cfg.DRY_RUN:
+            log.info(f"[DRY] 规则⑨面后面评: {name}")
+            evaled[rid] = link
+            continue
+        try:
+            text = doubao.ask(prompt)
+        except Exception as e:
+            log.warning(f"规则⑨ {name} 打分失败: {e}")
+            continue
+        # 面评文档:字段里是链接就直接写;是深澜文本/为空就现建一份再写
+        mp = _cell(f.get("面试评价"))
+        dm = _RE_DOC.search(mp)
+        try:
+            if dm:
+                did = dm.group(1)
+            else:
+                att = f.get("简历")
+                data = fs.download_attachment(att[0]) if isinstance(att, list) and att else None
+                fname = att[0].get("name", "简历.pdf") if isinstance(att, list) and att else "简历.pdf"
+                url = mianping.generate(fs, name, pos, {}, data, fname)
+                fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"面试评价": url})
+                did = _RE_DOC.search(url).group(1)
+            where = mianping.insert_round_eval(fs, did, "一面", text)
+            _remind(f"{_at_of(r, f)}候选人【{name}】的一面AI面评已写入面评文档({where}),请补充人工结论~")
+            log.info(f"✅ 规则⑨ {name} 一面AI面评已写入({where})")
+            evaled[rid] = link
+            done += 1
+        except Exception as e:
+            log.warning(f"规则⑨ {name} 写入面评失败: {e}")
+            continue
+    _save_state(state)
+    return done
+
+
+import re as _re_mod
+_RE_DOC = _re_mod.compile(r"/(?:docx|docs)/([A-Za-z0-9]{20,})")
+
+
 def rule4_position_correction(records):
     """校正联动：HR 在进度表人工改了【岗位】→ 本服务生成的面评自动跟上——
     改标题为 面试评价-新岗位-姓名 + 按新岗位的标准包重打AI初筛分。
