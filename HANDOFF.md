@@ -4,6 +4,8 @@
 
 ## 🟢 最新状态（2026-07-18 已上线并全自动跑通）
 
+**✅ 面评格式定稿+深挖排查(2026-07-19凌晨)**：①玄玄批面评排版→**照他示例文档`RDDMdeNbpowX5mxWA2Qcmjp7nZ9`重做**:优点/缺点/分项打分用**飞书原生有序列表**(block_type13,绝不手敲序号-铁律)、字段一行一段、金字塔简洁(rule9输出改JSON+mianping.render_round_eval渲染);②**AI初筛重做=「简历-岗位匹配」**:只评简历可见(硬性门槛逐项核对/匹配亮点/风险缺口/面试需验证),**不打分**(分留给面试),禁评沟通逻辑等面试维度——玄玄批"初筛用面试维度是胡来"的修正;③**深挖出线上最大缺口:LLM无任何key一直裸奔**(意图分类全回退OTHER/知识库问答只有兜底话术,此前E2E的"AI回复"其实全是模板消息)→gatewayChat支持完整chat/completions路径接**火山豆包**顶上(env:ANTHROPIC_API_KEY=ark key+LLM_PROXY_ENDPOINT=ark完整URL+LLM_MODEL=doubao),意图分类7/7、KB问答实测正常(薪资按口径答不转人工+答完拉回约面);Claude/Bedrock key到位换env即可;④修backfill回填时间按轮次写字段(原硬编码一面时间);⑤建日程auto_record实测✓;⑥**待办:cli_aad38缺通讯录权限**(邮箱换openId返回空→面试官当不成主持人→妙记归属有问题,要玄玄/宏佳开contact权限+范围全员);⑦真实对话全流程/微信号加友待真人配合实测。展示用测试行recvpLMF46JCUj+新版面评`KLWldcWnZoR7QIxvttIckG6bnob`保留待玄玄验收。
+
 **✅ 全量回归(2026-07-19深夜,玄玄要求"整测一遍"):全链路通过**：①健康:4容器(aihr-table/miaopin/miaopin-console/aihr-nginx)+nginx透传(/reach /mh/callback /console)✓②/kb权限玄玄已开,知识库全链路通(9973字,触达服务实拉含红线+问答)✓③时间槽位单测✓(修了raw重复拼接)④链路B自动填充✓⑤**规则⑨真实E2E**:贴逐字稿→按知识库固定输出结构生成11字段面评(结论:推76分,分项用人力岗30分制专属体系)→精准插入「一面:」后✓(修了漏import standards)⑥约成链路:backfill INTENT_ACCEPT→**勾【一面】复选框+触达状态=已确认+一面时间+备忘录+群报喜**全对✓。测试数据已全部回滚。宏佳更新已同步(console:RolesGuard即时生效+合并了我们的重发修复;AI-HR无新代码)。
 
 **代码仓库**：https://github.com/p04014664-boop/AI-HR-table-service （**公开**——玄玄拍板，公开前已抹服务器IP；GitHub账号 p04014664-boop，gh CLI 已登录本机）。宏佳触达服务仓库：git@github.com:JhjInsist/AI-HR.git（公开），本地克隆在 `../秒聘服务-宏佳/`（服务器旧版备份在 `../秒聘服务-宏佳-服务器旧版备份/`，含 .env）。**分工铁律（玄玄定的）：所有操作表格=本服务；所有操作Mongo+对外发消息=宏佳触达服务。**
