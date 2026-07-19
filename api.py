@@ -108,7 +108,8 @@ def _backfill(body):
         upd["触达状态"] = st
     ts = _parse_time_ms(body.get("interviewTime"))
     if ts:
-        upd["一面时间"] = ts
+        rd0 = body.get("round") or "一面"
+        upd[f"{rd0}时间" if rd0 in ("一面", "二面", "三面") else "一面时间"] = ts
     # 候选人给出了期望的改期时间 → 置"要改期" + 群里@一面面试官拍板(改一面时间=拍板,规则⑧自动通知候选人)
     if body.get("expectTime"):
         upd["触达状态"] = "要改期"
