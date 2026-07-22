@@ -2,6 +2,10 @@
 
 给接手同事/另一个工具。看这份 + `PRODUCT.md` + `README.md` 就能接。
 
+## 🔴 事故复盘·2026-07-23（synced.add bug 刷屏 187 条·已闭环）
+
+**现象**:进度表被无限复制同一条「于兆涵」测试约面记录(AI-HR 里 recvq6afNjJheL,HR评估=约面)→刷出 187 条。**根因**=线上旧代码 rules.py `synced.add(cid)` 引用未定义名(synced 只是 rule1_sync 局部变量)→真实建档必 NameError→`_finish` 的 ok 到不了 True→白名单不落盘→每轮轮询/每次回调都当没处理过、无限重建。**处置(玄玄授权 SSH,本轮玄玄侧亲自部署)**:①`docker stop aihr-table` 止血 ②cleanup_yzh.py 删 187 条(仅备忘录=AI约面同步,0 误伤)+把源头 cid 1784717695223000 加进 data/state.json 白名单 ③rsync 修复版 rules.py(commit 9e561f8:删 synced.add + 豆包判岗位异步化)→`docker build -t aihr-table .`→rm 旧容器→`docker run -d --name aihr-table --network aihr-net -p 127.0.0.1:8090:8090 --env-file .env -v /opt/aihr-table-service/data:/app/data --restart unless-stopped aihr-table` ④验证 45s 不再刷、于兆涵归零。**教训**:①白名单落盘是唯一防重复屏障,`_finish(ok=True)` 必须真跑到 ②SSH 22 被那三个 `until ssh` 死循环疯狂重试触发防爆破封禁,杀掉循环即解封。**⚠️线上现在跑的是 9e561f8(异步判岗位版),已不是旧的 17:48 版**。
+
 ## 🟢🟢 交接·2026-07-22（新会话从这里接手）
 
 **服务器现状**：4容器全 Up 且跑最新代码——`aihr-table`(表格,Python)、`miaopin`(触达,NestJS)、`miaopin-console`(中台)、`aihr-nginx`(80入口)。部署方式:表格服务 rsync→/opt/aihr-table-service→docker build/run(`--network aihr-net -p 127.0.0.1:8090:8090 --env-file .env -v data`);触达 npm run build→rsync dist+src→/opt/miaopin-service→build/run(`--network aihr-net --env-file /opt/miaopin-deploy.env -v data`,无-p,nginx时代)。
