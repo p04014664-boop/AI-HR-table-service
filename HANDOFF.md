@@ -2,6 +2,20 @@
 
 给接手同事/另一个工具。看这份 + `PRODUCT.md` + `README.md` 就能接。
 
+## 🟢🟢 交接·2026-07-22（新会话从这里接手）
+
+**服务器现状**：4容器全 Up 且跑最新代码——`aihr-table`(表格,Python)、`miaopin`(触达,NestJS)、`miaopin-console`(中台)、`aihr-nginx`(80入口)。部署方式:表格服务 rsync→/opt/aihr-table-service→docker build/run(`--network aihr-net -p 127.0.0.1:8090:8090 --env-file .env -v data`);触达 npm run build→rsync dist+src→/opt/miaopin-service→build/run(`--network aihr-net --env-file /opt/miaopin-deploy.env -v data`,无-p,nginx时代)。
+
+**⭐约面回调=webhook(实测通,~10秒进表)**:佳芮说的"字段捷径/回调"=飞书多维表格【自动化】,不是事件订阅(我一度搞错,事件订阅延迟40s+还不稳,已弃)。链路:AI-HR表(简历及面评汇总 tblTSVXwu1onvPMa)配了自动化「新增/修改记录满足条件(HR评估=约面)→发HTTP POST到 http://ai-hr.juzibot.com/table-event, body {"record_id":"记录ID变量"}」→ nginx(已加`location = /table-event`→aihr-table:8090)→ 表格服务 api.py `/table-event` 端点 → rules.handle_aihr_event(record_id) 秒建。**webhook即时到达,9秒是豆包判岗位**(后续可把判岗位也异步再提速)。轮询 rule1_sync 留作兜底(慢循环60s)。**防重复**:_sync_one 用抢占锁 _try_claim/_finish(webhook×轮询并发防建两条,踩过:刘云昊建了2条)。
+
+**⭐本轮(7-22)已修**:①面评标题岗位对齐(搬深澜面评时标题用了BOSS名如"后端开发工程师(Golang)",改成标准岗位"后端工程师";进度表面试评价是文本字段不接受富文本段,用纯文本"标题\n链接"飞书自动识别URL可点;_do_sync改+存量11条已批量修)②已读乱回(触达 llm quickIntent 确定性前置:带时间/明确词直判不靠豆包lite瞎猜)③工作时间(触达 inWorkHours 北京9-22点外不聊天)④rule9面评/逐字稿群提醒去除⑤日程30min+去日程面评链接⑥好友通过自动发首条邀约⑦约成去重⑧提速(search+两步写入+快慢双循环)。
+
+**⭐剩余需求(玄玄列的,我吞过必须做,按序)**:1.改建日程逻辑(HR选面试时间+AI触达就建日程,不群里同步——现在是候选人确认才建)2.逐字稿自动收集(规则⑨自动抓妙记文字稿,不用手动贴链接)3.备注改姓名+岗位(候选人通过好友后企微备注=姓名+岗位,需秒回改备注接口)4.表格↔中台状态同步(AI触达/转人工勾选一致)5.开放日程编辑权限+自动开AI视图(会议纪要)6.定时发好友验证3小时一次7.改期/取消完善。**需求原文在飞书文档 `F8C1dAxb0oPHTgxITlFcP1GAnYb`(14:00/11:00/7-21三批,含图)**。
+
+**⚠️教训(玄玄批过)**:别吞需求,做完主动报;所有需求过一遍标状态别漏;生产环境改动前本地/测试验证。**分工**:表格服务玄玄侧(Claude)开发+部署,触达/中台宏佳,现玄玄侧也统一改;不走PR直推。
+
+---
+
 ## 🟢 最新状态（2026-07-18 已上线并全自动跑通）
 
 **📘 当前功能全景（2026-07-21）**：本地 `项目全书.md`；飞书 https://www.feishu.cn/docx/FWP1dKIWloe9v2xsk6ccRs0wnvg 。玄玄否掉原 11,013 字档案式写法，要求“只基于 GitHub 当前代码，用金字塔讲功能现状”。已拉齐远端：表格 `f7e048f`、触达 `dbc5bbe`、中台 `7dbe224`；新文 1,406 字，塔尖=主链路，三柱=建档/约面/运营，塔底=三个真实边界。表格 Python、触达 NestJS、中台后端均编译通过；中台前端因本机没安装依赖未复验。**本地改稿未提交、未 push**。上一工具未授权推入公开仓库的旧文历史仍待玄玄确认是否删除/改写。
