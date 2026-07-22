@@ -36,8 +36,38 @@ def _save_state(s):
     json.dump(s, open(cfg.STATE_FILE, "w"), ensure_ascii=False)
 
 
-def _enrich_candidate(rid, att, name, phone_written):
-    """后台补全:解析简历(候选人身份/补手机号)+ 搬简历附件。慢动作(15-25s)不阻塞主轮询。"""
+def _enrich_candidate(rid, name, f, opts, phone_written):
+    """后台补全(不阻塞秒建——玄玄最高优先级:记录先出现,解析动作滞后补):
+    ①豆包判岗位(~9s)→回填 岗位/大类/渠道 + 面评标题岗位对齐 ②解析简历补身份/手机 ③搬简历附件。"""
+    positions, categories, channels, screen = opts
+    # ① 岗位判定(豆包慢动作,之前卡在建档主路径导致进表要10秒;挪到这里,记录已先出现)
+    patch = {}
+    try:
+        boss = _cell(f.get("岗位"))
+        src = _cell(f.get("简历来源"))
+        j = doubao.classify_position(boss, src, positions, categories, channels)
+        if j.get("岗位") in positions:
+            patch["岗位"] = j["岗位"]
+        if j.get("大类") in categories:
+            patch["岗位大类"] = j["大类"]
+        if j.get("渠道") in channels:
+            patch["渠道"] = j["渠道"]
+        # 面评标题岗位对齐(玄玄需求):深澜面评标题用BOSS岗位名,换成我们的标准岗位;链接保留
+        mp_raw = f.get("面评")
+        mp = _cell(mp_raw)
+        link = mp_raw[0].get("link") if isinstance(mp_raw, list) and mp_raw and isinstance(mp_raw[0], dict) else ""
+        std_pos = patch.get("岗位") or "岗位待定"
+        if link:  # 标准标题 + 链接(飞书文本字段URL自动识别可点)
+            patch["面试评价"] = f"面试评价-{std_pos}-{name}\n{link}"
+        elif mp:
+            patch["面试评价"] = mp
+        if patch and not cfg.DRY_RUN:
+            fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, patch)
+        log.info(f"  ✅ 岗位后台回填: {name} 岗位={patch.get('岗位', '?')}")
+    except Exception as e:
+        log.warning(f"  {name} 岗位判定后台补全失败: {e}")
+    # ② 简历解析(补身份/手机)+ ③ 搬附件
+    att = f.get("简历") if isinstance(f.get("简历"), list) else None
     if not att:
         return
     try:
@@ -121,46 +151,30 @@ def _sync_one(full, opts, interviewer=None):
 
 
 def _do_sync(full, opts, interviewer, cid, f):
+    """秒建(玄玄最高优先级:3秒进表):只填"不用解析就能拿到"的基本信息立刻建记录,
+    岗位判定/面评标题/简历解析这些慢动作全丢后台线程补,不挡记录出现。"""
     name = _cell(f.get("姓名"))
     positions, categories, channels, screen = opts
-    boss = _cell(f.get("岗位"))
-    src = _cell(f.get("简历来源"))
     phone = _cell(f.get("联系方式"))
     concl = _cell(f.get("AI HR结论"))
-    mp_raw = f.get("面评")  # 深澜面评(文档提及数组:text=深澜标题含BOSS岗位, link=文档)
-    mp = _cell(mp_raw)
     if interviewer is None:
         interviewer = (full.get("last_modified_by") or {}).get("id")
-    j = doubao.classify_position(boss, src, positions, categories, channels)
     rec = {"姓名": name, "备忘录": "AI约面同步"}
-    if j.get("岗位") in positions:
-        rec["岗位"] = j["岗位"]
-    if j.get("大类") in categories:
-        rec["岗位大类"] = j["大类"]
-    if j.get("渠道") in channels:
-        rec["渠道"] = j["渠道"]
     if phone:
         rec["联系方式"] = phone
     if "通过" in concl and "通过" in screen:
         rec["简历筛选"] = "通过"
-    # 面评标题岗位对齐(玄玄需求):深澜面评标题用的是BOSS岗位名,换成我们的标准岗位;链接保留指向深澜文档
-    link = mp_raw[0].get("link") if isinstance(mp_raw, list) and mp_raw and isinstance(mp_raw[0], dict) else ""
-    std_pos = rec.get("岗位") or "岗位待定"
-    if link:  # 标准标题 + 链接(飞书文本字段里URL自动识别可点);标题岗位用我们的标准岗位
-        rec["面试评价"] = f"面试评价-{std_pos}-{name}\n{link}"
-    elif mp:
-        rec["面试评价"] = mp
     if interviewer:
         rec["一面面试官"] = [{"id": interviewer}]
-    att = f.get("简历") if isinstance(f.get("简历"), list) else None
     if cfg.DRY_RUN:
-        log.info(f"[DRY] 秒建: {json.dumps(rec, ensure_ascii=False)}")
+        log.info(f"[DRY] 秒建: {json.dumps(rec, ensure_ascii=False)} (岗位/面评/简历后台补)")
         return True
     rid = fs.create_record(cfg.PROG_APP, cfg.PROG_TABLE, rec)
-    log.info(f"⚡秒建: {name} ({rid}) 岗位={rec.get('岗位', '?')}")
-    threading.Thread(target=_enrich_candidate,
-                     args=(rid, att, name, bool(phone)), daemon=True).start()
-    synced.add(cid)
+    log.info(f"⚡秒建: {name} ({rid}) —— 岗位/面评/简历后台补")
+    _threading.Thread(target=_enrich_candidate,
+                      args=(rid, name, f, opts, bool(phone)), daemon=True).start()
+    # 白名单由 _sync_one 的 _finish(cid, ok=True) 落盘,这里不再手动 synced.add
+    # (旧代码 synced.add(cid) 引用未定义名 → 真实建档必 NameError → ok 到不了 True → 白名单不落 → 才是重复建两条的真根因)
     return True
 
 
