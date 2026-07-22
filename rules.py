@@ -77,19 +77,58 @@ def _prog_options():
     return v
 
 
-def _sync_one(full, synced, opts, interviewer=None):
+import threading as _threading
+_sync_lock = _threading.Lock()
+_inflight = set()  # 正在处理的候选人ID,防 webhook 与轮询并发建两条
+
+
+def _try_claim(cid):
+    """抢占某候选人的处理权:已同步过或正在处理→抢不到(返回False)。锁内实时读state,原子。"""
+    with _sync_lock:
+        st = _load_state()
+        if cid in set(st.get("synced", [])) or cid in _inflight:
+            return False
+        _inflight.add(cid)
+        return True
+
+
+def _finish(cid, ok):
+    """释放处理权;成功则落入 synced 白名单。"""
+    with _sync_lock:
+        _inflight.discard(cid)
+        if ok:
+            st = _load_state()
+            s = set(st.get("synced", []))
+            s.add(cid)
+            st["synced"] = list(s)
+            _save_state(st)
+
+
+def _sync_one(full, opts, interviewer=None):
     """处理单条 AI-HR 约面记录 → 秒建进度表记录 + 简历后台补。full=带automatic的完整记录。
-    interviewer=谁点约面的open_id(事件驱动直接给,轮询兜底用 last_modified_by)。返回是否新建。"""
+    interviewer=谁点约面的open_id。抢占锁防并发重复。返回是否新建。"""
     import threading
     f = full["fields"]
     cid = _cell(f.get("AIHR候选人ID")) or full["record_id"]
+    if not _try_claim(cid):
+        return False  # 已同步/正在处理,跳过(防 webhook×轮询 建两条)
+    ok = False
+    try:
+        ok = _do_sync(full, opts, interviewer, cid, f)
+    finally:
+        _finish(cid, ok)
+    return ok
+
+
+def _do_sync(full, opts, interviewer, cid, f):
     name = _cell(f.get("姓名"))
     positions, categories, channels, screen = opts
     boss = _cell(f.get("岗位"))
     src = _cell(f.get("简历来源"))
     phone = _cell(f.get("联系方式"))
     concl = _cell(f.get("AI HR结论"))
-    mp = _cell(f.get("面评"))
+    mp_raw = f.get("面评")  # 深澜面评(文档提及数组:text=深澜标题含BOSS岗位, link=文档)
+    mp = _cell(mp_raw)
     if interviewer is None:
         interviewer = (full.get("last_modified_by") or {}).get("id")
     j = doubao.classify_position(boss, src, positions, categories, channels)
@@ -104,14 +143,18 @@ def _sync_one(full, synced, opts, interviewer=None):
         rec["联系方式"] = phone
     if "通过" in concl and "通过" in screen:
         rec["简历筛选"] = "通过"
-    if mp:
+    # 面评标题岗位对齐(玄玄需求):深澜面评标题用的是BOSS岗位名,换成我们的标准岗位;链接保留指向深澜文档
+    link = mp_raw[0].get("link") if isinstance(mp_raw, list) and mp_raw and isinstance(mp_raw[0], dict) else ""
+    std_pos = rec.get("岗位") or "岗位待定"
+    if link:  # 标准标题 + 链接(飞书文本字段里URL自动识别可点);标题岗位用我们的标准岗位
+        rec["面试评价"] = f"面试评价-{std_pos}-{name}\n{link}"
+    elif mp:
         rec["面试评价"] = mp
     if interviewer:
         rec["一面面试官"] = [{"id": interviewer}]
     att = f.get("简历") if isinstance(f.get("简历"), list) else None
     if cfg.DRY_RUN:
         log.info(f"[DRY] 秒建: {json.dumps(rec, ensure_ascii=False)}")
-        synced.add(cid)
         return True
     rid = fs.create_record(cfg.PROG_APP, cfg.PROG_TABLE, rec)
     log.info(f"⚡秒建: {name} ({rid}) 岗位={rec.get('岗位', '?')}")
@@ -124,17 +167,10 @@ def _sync_one(full, synced, opts, interviewer=None):
 def handle_aihr_event(record_id, operator_open_id=None):
     """⚡事件驱动:AI-HR 某条记录变更 → 若是新约面则**立即**秒建进度表记录。
     operator_open_id=谁点的约面(飞书事件直接给,当一面面试官)。"""
-    state = _load_state()
-    synced = set(state["synced"])
     full = fs.get_record(cfg.AIHR_APP, cfg.AIHR_TABLE, record_id, automatic=True)
     if not full or _cell(full["fields"].get("HR评估")) != "约面":
         return
-    cid = _cell(full["fields"].get("AIHR候选人ID")) or record_id
-    if cid in synced:
-        return
-    if _sync_one(full, synced, _prog_options(), interviewer=operator_open_id):
-        state["synced"] = list(synced)
-        _save_state(state)
+    _sync_one(full, _prog_options(), interviewer=operator_open_id)
 
 
 def rule1_sync():
@@ -150,13 +186,11 @@ def rule1_sync():
         if cid in synced:
             continue
         full = fs.get_record(cfg.AIHR_APP, cfg.AIHR_TABLE, r["record_id"], automatic=True)
-        if full and _sync_one(full, synced, opts):
+        if full and _sync_one(full, opts):
             done += 1
         if cfg.MAX_PER_CYCLE and done >= cfg.MAX_PER_CYCLE:
             break
-    state["synced"] = list(synced)
-    _save_state(state)
-    return done
+    return done  # synced 由 _sync_one 抢占锁内更新,这里不再覆盖
 
 
 def fetch_progress():
