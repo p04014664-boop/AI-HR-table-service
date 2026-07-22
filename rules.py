@@ -77,72 +77,83 @@ def _prog_options():
     return v
 
 
-def rule1_sync():
-    """规则①(高频快循环):AI-HR【HR评估=约面】→ 判岗位+设面试官 → **秒建**进度表记录;简历解析/附件后台补。
-    提速(玄玄需求):①search 只取约面不扫全表(~1.4s)②两步写入——基础信息立即可见,简历解析+附件搬运丢后台
-    ③不依赖进度表全表(只靠 state.synced 防重复,含70白名单)。幂等(按候选人ID)。"""
+def _sync_one(full, synced, opts, interviewer=None):
+    """处理单条 AI-HR 约面记录 → 秒建进度表记录 + 简历后台补。full=带automatic的完整记录。
+    interviewer=谁点约面的open_id(事件驱动直接给,轮询兜底用 last_modified_by)。返回是否新建。"""
     import threading
+    f = full["fields"]
+    cid = _cell(f.get("AIHR候选人ID")) or full["record_id"]
+    name = _cell(f.get("姓名"))
+    positions, categories, channels, screen = opts
+    boss = _cell(f.get("岗位"))
+    src = _cell(f.get("简历来源"))
+    phone = _cell(f.get("联系方式"))
+    concl = _cell(f.get("AI HR结论"))
+    mp = _cell(f.get("面评"))
+    if interviewer is None:
+        interviewer = (full.get("last_modified_by") or {}).get("id")
+    j = doubao.classify_position(boss, src, positions, categories, channels)
+    rec = {"姓名": name, "备忘录": "AI约面同步"}
+    if j.get("岗位") in positions:
+        rec["岗位"] = j["岗位"]
+    if j.get("大类") in categories:
+        rec["岗位大类"] = j["大类"]
+    if j.get("渠道") in channels:
+        rec["渠道"] = j["渠道"]
+    if phone:
+        rec["联系方式"] = phone
+    if "通过" in concl and "通过" in screen:
+        rec["简历筛选"] = "通过"
+    if mp:
+        rec["面试评价"] = mp
+    if interviewer:
+        rec["一面面试官"] = [{"id": interviewer}]
+    att = f.get("简历") if isinstance(f.get("简历"), list) else None
+    if cfg.DRY_RUN:
+        log.info(f"[DRY] 秒建: {json.dumps(rec, ensure_ascii=False)}")
+        synced.add(cid)
+        return True
+    rid = fs.create_record(cfg.PROG_APP, cfg.PROG_TABLE, rec)
+    log.info(f"⚡秒建: {name} ({rid}) 岗位={rec.get('岗位', '?')}")
+    threading.Thread(target=_enrich_candidate,
+                     args=(rid, att, name, bool(phone)), daemon=True).start()
+    synced.add(cid)
+    return True
+
+
+def handle_aihr_event(record_id, operator_open_id=None):
+    """⚡事件驱动:AI-HR 某条记录变更 → 若是新约面则**立即**秒建进度表记录。
+    operator_open_id=谁点的约面(飞书事件直接给,当一面面试官)。"""
     state = _load_state()
     synced = set(state["synced"])
-    positions, categories, channels, screen = _prog_options()
+    full = fs.get_record(cfg.AIHR_APP, cfg.AIHR_TABLE, record_id, automatic=True)
+    if not full or _cell(full["fields"].get("HR评估")) != "约面":
+        return
+    cid = _cell(full["fields"].get("AIHR候选人ID")) or record_id
+    if cid in synced:
+        return
+    if _sync_one(full, synced, _prog_options(), interviewer=operator_open_id):
+        state["synced"] = list(synced)
+        _save_state(state)
 
-    # 只查约面(服务端过滤,不扫全表)。search 不返回 last_modified_by,新约面再单条查拿面试官。
+
+def rule1_sync():
+    """规则①(轮询兜底):事件驱动是主路径(handle_aihr_event);这里定期 search 约面补漏,
+    防事件偶发丢失。search 只取约面不扫全表,只靠 state.synced 防重复。"""
+    state = _load_state()
+    synced = set(state["synced"])
+    opts = _prog_options()
     records = fs.search_records(cfg.AIHR_APP, cfg.AIHR_TABLE, "HR评估", "is", "约面")
     done = 0
     for r in records:
-        f = r["fields"]
-        cid = _cell(f.get("AIHR候选人ID")) or r["record_id"]
+        cid = _cell(r["fields"].get("AIHR候选人ID")) or r["record_id"]
         if cid in synced:
-            continue  # 幂等:状态文件已记录(含预置的老约面白名单)
-        name = _cell(f.get("姓名"))
-        boss = _cell(f.get("岗位"))
-        src = _cell(f.get("简历来源"))
-        phone = _cell(f.get("联系方式"))
-        concl = _cell(f.get("AI HR结论"))
-        mp = _cell(f.get("面评"))
-
-        # 单条查拿 last_modified_by(谁点的约面=一面面试官;读写同一应用→open_id一致能写人员字段)
-        interviewer = None
-        try:
-            full = fs.get_record(cfg.AIHR_APP, cfg.AIHR_TABLE, r["record_id"], automatic=True)
-            interviewer = ((full or {}).get("last_modified_by") or {}).get("id")
-        except Exception:
-            pass
-
-        j = doubao.classify_position(boss, src, positions, categories, channels)
-
-        # ── 第一步:秒建基础记录("能呈现的信息"进——判岗位/联系方式/面试官;简历解析放后台) ──
-        rec = {"姓名": name, "备忘录": "AI约面同步"}
-        if j.get("岗位") in positions:
-            rec["岗位"] = j["岗位"]
-        if j.get("大类") in categories:
-            rec["岗位大类"] = j["大类"]
-        if j.get("渠道") in channels:
-            rec["渠道"] = j["渠道"]
-        if phone:
-            rec["联系方式"] = phone
-        if "通过" in concl and "通过" in screen:
-            rec["简历筛选"] = "通过"
-        if mp:
-            rec["面试评价"] = mp
-        if interviewer:
-            rec["一面面试官"] = [{"id": interviewer}]
-        att = f.get("简历") if isinstance(f.get("简历"), list) else None
-
-        if cfg.DRY_RUN:
-            log.info(f"[DRY] 规则①→秒建: {json.dumps(rec, ensure_ascii=False)}")
-        else:
-            rid = fs.create_record(cfg.PROG_APP, cfg.PROG_TABLE, rec)
-            log.info(f"规则①已秒建: {name} ({rid}) 岗位={rec.get('岗位', '?')}")
-            # ── 第二步:后台补简历解析(候选人身份/手机)+ 附件搬运,不阻塞轮询 ──
-            threading.Thread(target=_enrich_candidate,
-                             args=(rid, att, name, bool(phone)), daemon=True).start()
-
-        synced.add(cid)
-        done += 1
+            continue
+        full = fs.get_record(cfg.AIHR_APP, cfg.AIHR_TABLE, r["record_id"], automatic=True)
+        if full and _sync_one(full, synced, opts):
+            done += 1
         if cfg.MAX_PER_CYCLE and done >= cfg.MAX_PER_CYCLE:
             break
-
     state["synced"] = list(synced)
     _save_state(state)
     return done
@@ -465,11 +476,7 @@ def rule9_interview_eval(records):
         m = _RE_DOC.search(link)
         if not m:
             if evaled.get(rid) != f"BAD:{link}":
-                try:
-                    _remind(f"{_at_of(r, f)}候选人【{name}】的逐字稿链接我读不了(要飞书文档链接,妙记页面链接不行)。"
-                            f"请打开妙记里的「文字记录」文档,把那个文档的链接贴进来~")
-                except Exception:
-                    pass
+                log.warning(f"规则⑨ {name} 逐字稿链接读不了(要飞书文档链接): {link[:60]}")
                 evaled[rid] = f"BAD:{link}"
                 _save_state(state)
             continue
@@ -526,8 +533,7 @@ def rule9_interview_eval(records):
                 fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"面试评价": url})
                 did = _RE_DOC.search(url).group(1)
             where = mianping.insert_round_eval(fs, did, "一面", text)
-            _remind(f"{_at_of(r, f)}候选人【{name}】的一面AI面评已写入面评文档({where}),请补充人工结论~")
-            log.info(f"✅ 规则⑨ {name} 一面AI面评已写入({where})")
+            log.info(f"✅ 规则⑨ {name} 一面AI面评已写入面评文档({where})，未发群(反馈形式待定)")
             evaled[rid] = link
             done += 1
         except Exception as e:

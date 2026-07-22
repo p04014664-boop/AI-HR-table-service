@@ -235,6 +235,14 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, _backfill(body))
             if self.path.rstrip("/") == "/progress/handover":
                 return self._send(200, _handover(body))
+            if self.path.rstrip("/") == "/table-event":
+                # ⚡ AI-HR 表自动化回调:HR评估变约面 → 立即秒建。后台处理,先回200不阻塞飞书
+                rid = body.get("record_id") or body.get("recordId") or body.get("id")
+                if rid:
+                    import rules
+                    threading.Thread(target=rules.handle_aihr_event, args=(str(rid),), daemon=True).start()
+                    log.info(f"⚡收到约面回调 record_id={rid}")
+                return self._send(200, {"ok": True})
             return self._send(404, {"ok": False, "msg": "not found"})
         except Exception as e:
             log.error(f"接口异常 {self.path}: {e}")
