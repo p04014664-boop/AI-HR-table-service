@@ -12,25 +12,30 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger("main")
 
 
-def cycle():
-    # 每轮只拉一次进度表,7条规则共用(2000+条×每规则各拉一遍会把API打爆)
+def cycle_fast():
+    """高频(每 POLL_INTERVAL 秒):表格即时动作——约面同步/触达/转人工,各自 search 精准查,不扫全表。"""
+    for label, fn in [("规则①约面同步", rules.rule1_sync),
+                      ("规则②触达", rules.rule2_reach),
+                      ("规则⑤转人工同步", rules.rule5_handover)]:
+        try:
+            n = fn()
+            if n:
+                log.info(f"{label}：本轮处理 {n} 条")
+        except Exception as e:
+            log.error(f"{label}出错: {e}")
+
+
+def cycle_slow():
+    """低频(每 SLOW_INTERVAL 秒):手动简历/岗位校正/改期/面后面评——拉进度表全表遍历,不需要秒级。"""
     try:
         prog = rules.fetch_progress()
     except Exception as e:
-        log.error(f"拉进度表失败,本轮跳过: {e}")
+        log.error(f"拉进度表失败,慢循环跳过: {e}")
         return
-    steps = [
-        ("规则①约面同步", lambda: rules.rule1_sync(prog)),
-        ("规则②触达", lambda: rules.rule2_reach(prog)),
-        ("链路B手动简历", lambda: rules.rule3_manual_resume(prog)),
-        ("规则④岗位校正联动", lambda: rules.rule4_position_correction(prog)),
-        ("规则⑤转人工同步", lambda: rules.rule5_handover(prog)),
-        # 规则⑥(转人工超时提醒)已按玄玄决定取消:转人工后去秒回工作台看消息即可
-        # 规则⑦(轮次推进/自动约二面三面)已实现但暂停启用,等玄玄按场景聊完再开
-        ("规则⑧改期联动", lambda: rules.rule8_time_change(prog)),
-        ("规则⑨面后面评", lambda: rules.rule9_interview_eval(prog)),
-    ]
-    for label, fn in steps:
+    for label, fn in [("链路B手动简历", lambda: rules.rule3_manual_resume(prog)),
+                      ("规则④岗位校正联动", lambda: rules.rule4_position_correction(prog)),
+                      ("规则⑧改期联动", lambda: rules.rule8_time_change(prog)),
+                      ("规则⑨面后面评", lambda: rules.rule9_interview_eval(prog))]:
         try:
             n = fn()
             if n:
@@ -42,10 +47,15 @@ def cycle():
 def main():
     once = "--once" in sys.argv
     log.info(f"===【句子秒聘·表格管理服务】启动 · DRY_RUN={cfg.DRY_RUN} · "
-             f"进度表={cfg.PROG_APP}/{cfg.PROG_TABLE} · 轮询{cfg.POLL_INTERVAL}s ===")
-    api.start()  # 触达服务回调接口(/progress/backfill /progress/handover)
+             f"快循环{cfg.POLL_INTERVAL}s(约面/触达/转人工) · 慢循环{cfg.SLOW_INTERVAL}s(手动简历/校正/改期/面评) ===")
+    api.start()  # 触达服务回调接口(/progress/backfill /progress/handover /kb /notify)
+    import time as _t
+    last_slow = 0
     while True:
-        cycle()
+        cycle_fast()
+        if _t.time() - last_slow >= cfg.SLOW_INTERVAL:
+            cycle_slow()
+            last_slow = _t.time()
         if once:
             break
         time.sleep(cfg.POLL_INTERVAL)

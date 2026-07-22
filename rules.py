@@ -36,58 +36,82 @@ def _save_state(s):
     json.dump(s, open(cfg.STATE_FILE, "w"), ensure_ascii=False)
 
 
-def rule1_sync(prog_records):
-    """规则①：AI-HR【HR评估=约面】→ 判岗位 + 解析简历 + 设面试官 → 写进度表。幂等(按候选人ID)。"""
+def _enrich_candidate(rid, att, name, phone_written):
+    """后台补全:解析简历(候选人身份/补手机号)+ 搬简历附件。慢动作(15-25s)不阻塞主轮询。"""
+    if not att:
+        return
+    try:
+        data = fs.download_attachment(att[0])
+        fields, way = resume.extract_fields(data, att[0].get("name", ""))
+        upd = {}
+        shen = fields.get("是否应届生", "")
+        if shen in ("应届生", "非应届生"):
+            upd["候选人身份"] = shen
+        if not phone_written and fields.get("手机号"):
+            upd["联系方式"] = fields["手机号"]
+        if upd:
+            fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, upd)
+        try:
+            tok = fs.upload_media(att[0].get("name", "简历.pdf"), data, cfg.PROG_APP)
+            fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"简历": [{"file_token": tok}]})
+        except Exception as e:
+            log.warning(f"  {name} 简历附件搬运失败(需 drive 上传权限): {e}")
+        log.info(f"  ✅ 规则①后台补全: {name} 身份={shen or '?'} ({way})")
+    except Exception as e:
+        log.warning(f"  {name} 简历后台补全失败: {e}")
+
+
+# 字段选项 60s 缓存(每轮 rule1 都取会拖慢;选项极少变)
+_opt_cache = {"at": 0, "v": None}
+
+
+def _prog_options():
+    import time as _t
+    if _opt_cache["v"] and _t.time() - _opt_cache["at"] < 60:
+        return _opt_cache["v"]
+    v = (fs.field_options(cfg.PROG_APP, cfg.PROG_TABLE, "岗位"),
+         fs.field_options(cfg.PROG_APP, cfg.PROG_TABLE, "岗位大类"),
+         fs.field_options(cfg.PROG_APP, cfg.PROG_TABLE, "渠道"),
+         fs.field_options(cfg.PROG_APP, cfg.PROG_TABLE, "简历筛选"))
+    _opt_cache.update(at=_t.time(), v=v)
+    return v
+
+
+def rule1_sync():
+    """规则①(高频快循环):AI-HR【HR评估=约面】→ 判岗位+设面试官 → **秒建**进度表记录;简历解析/附件后台补。
+    提速(玄玄需求):①search 只取约面不扫全表(~1.4s)②两步写入——基础信息立即可见,简历解析+附件搬运丢后台
+    ③不依赖进度表全表(只靠 state.synced 防重复,含70白名单)。幂等(按候选人ID)。"""
+    import threading
     state = _load_state()
     synced = set(state["synced"])
-    positions = fs.field_options(cfg.PROG_APP, cfg.PROG_TABLE, "岗位")
-    categories = fs.field_options(cfg.PROG_APP, cfg.PROG_TABLE, "岗位大类")
-    channels = fs.field_options(cfg.PROG_APP, cfg.PROG_TABLE, "渠道")
-    screen = fs.field_options(cfg.PROG_APP, cfg.PROG_TABLE, "简历筛选")
+    positions, categories, channels, screen = _prog_options()
 
-    # 进度表里已被本服务 AI 同步过的人(按姓名)——第二道防重复
-    already = {_cell(r["fields"].get("姓名")) for r in prog_records
-               if "AI约面同步" in _cell(r["fields"].get("备忘录"))}
-
-    records = fs.list_records(cfg.AIHR_APP, cfg.AIHR_TABLE, automatic_fields=True)
+    # 只查约面(服务端过滤,不扫全表)。search 不返回 last_modified_by,新约面再单条查拿面试官。
+    records = fs.search_records(cfg.AIHR_APP, cfg.AIHR_TABLE, "HR评估", "is", "约面")
     done = 0
     for r in records:
         f = r["fields"]
-        if _cell(f.get("HR评估")) != "约面":
-            continue
         cid = _cell(f.get("AIHR候选人ID")) or r["record_id"]
         if cid in synced:
-            continue  # 幂等①：状态文件已记录(含预置的老约面白名单)
-
+            continue  # 幂等:状态文件已记录(含预置的老约面白名单)
         name = _cell(f.get("姓名"))
-        if name in already:  # 幂等②：进度表已有该人AI同步记录
-            synced.add(cid)
-            continue
         boss = _cell(f.get("岗位"))
         src = _cell(f.get("简历来源"))
         phone = _cell(f.get("联系方式"))
         concl = _cell(f.get("AI HR结论"))
-        mianping = _cell(f.get("面评"))
+        mp = _cell(f.get("面评"))
+
+        # 单条查拿 last_modified_by(谁点的约面=一面面试官;读写同一应用→open_id一致能写人员字段)
+        interviewer = None
+        try:
+            full = fs.get_record(cfg.AIHR_APP, cfg.AIHR_TABLE, r["record_id"], automatic=True)
+            interviewer = ((full or {}).get("last_modified_by") or {}).get("id")
+        except Exception:
+            pass
 
         j = doubao.classify_position(boss, src, positions, categories, channels)
 
-        # 解析简历：补候选人身份 + 补没爬到的手机号
-        shen = ""
-        att = f.get("简历") if isinstance(f.get("简历"), list) else None
-        if att:
-            try:
-                data = fs.download_attachment(att[0])
-                fields, way = resume.extract_fields(data, att[0].get("name", ""))
-                shen = fields.get("是否应届生", "")
-                if not phone:
-                    phone = fields.get("手机号", "")
-                log.info(f"  简历解析({way}): {name} 身份={shen} 手机={phone or '无'}")
-            except Exception as e:
-                log.warning(f"  {name} 简历解析失败: {e}")
-
-        # 一面面试官 = 谁点的约面(last_modified_by)。读写同一应用 → open_id 一致，能写进人员字段。
-        interviewer = (r.get("last_modified_by") or {}).get("id")
-
+        # ── 第一步:秒建基础记录("能呈现的信息"进——判岗位/联系方式/面试官;简历解析放后台) ──
         rec = {"姓名": name, "备忘录": "AI约面同步"}
         if j.get("岗位") in positions:
             rec["岗位"] = j["岗位"]
@@ -99,25 +123,20 @@ def rule1_sync(prog_records):
             rec["联系方式"] = phone
         if "通过" in concl and "通过" in screen:
             rec["简历筛选"] = "通过"
-        if mianping:
-            rec["面试评价"] = mianping
-        if shen in ("应届生", "非应届生"):
-            rec["候选人身份"] = shen
+        if mp:
+            rec["面试评价"] = mp
         if interviewer:
             rec["一面面试官"] = [{"id": interviewer}]
+        att = f.get("简历") if isinstance(f.get("简历"), list) else None
 
         if cfg.DRY_RUN:
-            log.info(f"[DRY] 规则①→写: {json.dumps(rec, ensure_ascii=False)}")
+            log.info(f"[DRY] 规则①→秒建: {json.dumps(rec, ensure_ascii=False)}")
         else:
             rid = fs.create_record(cfg.PROG_APP, cfg.PROG_TABLE, rec)
-            if att:  # 搬简历附件：下载→上传到进度表→写附件字段
-                try:
-                    tok = fs.upload_media(att[0].get("name", "简历.pdf"),
-                                          fs.download_attachment(att[0]), cfg.PROG_APP)
-                    fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"简历": [{"file_token": tok}]})
-                except Exception as e:
-                    log.warning(f"  {name} 简历附件搬运失败(需 drive 上传权限): {e}")
-            log.info(f"规则①已写入: {name} ({rid})")
+            log.info(f"规则①已秒建: {name} ({rid}) 岗位={rec.get('岗位', '?')}")
+            # ── 第二步:后台补简历解析(候选人身份/手机)+ 附件搬运,不阻塞轮询 ──
+            threading.Thread(target=_enrich_candidate,
+                             args=(rid, att, name, bool(phone)), daemon=True).start()
 
         synced.add(cid)
         done += 1
@@ -176,29 +195,28 @@ def _invite(rid, f, round_name):
     requests.post(f"{cfg.REACH_URL}/reach", json=payload, timeout=30)
 
 
-def rule2_reach(records):
-    """规则②：进度表【AI触达】勾选 → 前置自检必填信息 → 齐了才调触达服务加企微好友。
-    缺信息：不触达，去群里@点勾选的人(或一面面试官)报缺什么；补齐后下一轮自动触达。
-    重触达(玄玄定的场景)：加不上好友→HR人工校正联系方式(可能填成微信号)→
-      ①联系方式变了且仍勾着 → 自动重新触达新号；②取消勾选再勾 → 也重新触达。
-    幂等：reached 记 {记录ID: 触达时的联系方式}；同缺项组合只提醒一次。"""
+def rule2_reach():
+    """规则②(高频快循环)：进度表【AI触达】勾选 → 前置自检必填信息 → 齐了才调触达服务加企微好友。
+    提速:search 只取勾了AI触达的记录(不扫全表);取消勾选靠 reached 差集检测。
+    缺信息:不触达,群里@点勾选的人报缺什么。重触达:联系方式人工校正后自动重发/取消再勾重发。
+    幂等:reached 记 {记录ID: 触达时的联系方式}。"""
     state = _load_state()
     reached = state.get("reached")
-    if isinstance(reached, list):  # 老格式(纯ID列表)迁移:联系方式记空=不知道,变化检测从下次起效
+    if isinstance(reached, list):
         reached = {rid: "" for rid in reached}
     state["reached"] = reached = reached or {}
     reminded = state.setdefault("reminded", {})
     invited = state.setdefault("round_invited", {})
     known_time = state.setdefault("known_time", {})
+    # search 只取勾了 AI触达 的记录(复选框 is true)
+    rows = fs.search_records(cfg.PROG_APP, cfg.PROG_TABLE, "AI触达", "is", "true")
+    checked_ids = {r["record_id"] for r in rows}
+    for rid in [k for k in list(reached) if k not in checked_ids]:
+        reached.pop(rid, None)  # 取消勾选=撤销授权;再勾会重新触达
     done = 0
-    for r in records:
+    for r in rows:
         f = r["fields"]
         rid = r["record_id"]
-        checked = f.get("AI触达") or f.get("AI触答")  # 兼容"触答"笔误字段名
-        if not checked:
-            if rid in reached:
-                reached.pop(rid, None)  # 取消勾选=撤销授权;再勾=重新触达
-            continue
         contact_now = _cell(f.get("联系方式")).strip()
         if rid in reached:
             prev = reached[rid]
@@ -212,7 +230,8 @@ def rule2_reach(records):
         if missing:
             sig = ",".join(missing)
             if reminded.get(rid) != sig:
-                msg = (f"{_at_of(r, f)}候选人【{name or rid}】勾了AI触达，但还缺：{('、'.join(missing))}。"
+                at_rec = fs.get_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, automatic=True) or r
+                msg = (f"{_at_of(at_rec, f)}候选人【{name or rid}】勾了AI触达，但还缺：{('、'.join(missing))}。"
                        f"补齐后我会自动发起触达~")
                 if cfg.DRY_RUN:
                     log.info(f"[DRY] 规则②缺信息提醒: {msg}")
@@ -246,50 +265,51 @@ def rule2_reach(records):
     return done
 
 
-def rule5_handover(records):
-    """规则⑤(转人工)：进度表【转人工】勾选状态变化 → 同步给触达服务(宏佳)，
-    由它更新 Mongo 里该候选人触达任务的 humanTakeover。true=AI 停止接待、HR 真人跟进；取消勾选=恢复AI。
-    分工铁律：本服务只动表格；Mongo/对外发消息一律经触达服务。
-    幂等：state 记录每条的上次状态，只有变化才调；调失败不记状态、下轮重试。"""
-    state = _load_state()
-    known = state.setdefault("handover", {})
-    done = 0
-    for r in records:
-        rid = r["record_id"]
-        cur = bool(r["fields"].get("转人工"))
-        prev = known.get(rid)
-        if prev is None and not cur:
-            known[rid] = False       # 首次见到且未勾选：只登记，不打扰触达服务
-            continue
-        if prev == cur:
-            continue
-        name = _cell(r["fields"].get("姓名"))
-        if cfg.DRY_RUN:
-            log.info(f"[DRY] 规则⑤→转人工: {name} handover={cur}")
+def _sync_handover(rid, cur, name, known):
+    """调触达服务 /handover 同步单条转人工状态,处理 201/无任务;成功更新 known + 触达状态。"""
+    if cfg.DRY_RUN:
+        log.info(f"[DRY] 规则⑤→转人工: {name} handover={cur}")
+        known[rid] = cur
+        return
+    try:
+        resp = requests.post(f"{cfg.REACH_URL}/handover",
+                             json={"dataId": rid, "handover": cur}, timeout=15)
+        j = resp.json() if resp.ok else {}  # NestJS POST 默认 201,只认 200 会把成功当失败
+        if j.get("ok"):
+            log.info(f"✅ 规则⑤转人工同步: {name} → {'人工接管' if cur else '恢复AI'} ({j.get('taskId')})")
+            known[rid] = cur
+            if cur:
+                try:
+                    fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"触达状态": "转人工中"})
+                except Exception:
+                    pass
+        elif j.get("msg", "").startswith("dataId"):
+            log.info(f"  规则⑤: {name} 无触达任务,只记状态 handover={cur}")
             known[rid] = cur
         else:
-            try:
-                resp = requests.post(f"{cfg.REACH_URL}/handover",
-                                     json={"dataId": rid, "handover": cur}, timeout=15)
-                j = resp.json() if resp.ok else {}  # NestJS POST 默认返回 201,只认 200 会把成功当失败
-                if j.get("ok"):
-                    log.info(f"✅ 规则⑤转人工同步: {name} → {'人工接管' if cur else '恢复AI'} ({j.get('taskId')})")
-                    known[rid] = cur
-                    if cur:  # HR勾的转人工也在表上标出结构化状态
-                        try:
-                            fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"触达状态": "转人工中"})
-                        except Exception:
-                            pass
-                elif j.get("msg", "").startswith("dataId"):
-                    # 该记录压根没触达任务(比如还没触达过)：登记状态即可，不算失败
-                    log.info(f"  规则⑤: {name} 无触达任务，只记状态 handover={cur}")
-                    known[rid] = cur
-                else:
-                    log.warning(f"  规则⑤ {name} 同步失败({resp.status_code}): {resp.text[:120]}，下轮重试")
-                    continue
-            except Exception as e:
-                log.warning(f"  规则⑤ {name} 调触达服务失败: {e}，下轮重试")
-                continue
+            log.warning(f"  规则⑤ {name} 同步失败({resp.status_code}): {resp.text[:120]},下轮重试")
+    except Exception as e:
+        log.warning(f"  规则⑤ {name} 调触达服务失败: {e},下轮重试")
+
+
+def rule5_handover():
+    """规则⑤(高频快循环·转人工)：进度表【转人工】勾选状态变化 → 同步给触达服务。
+    提速:search 只取勾了转人工的记录;取消勾选靠 known 差集检测。true=AI停;取消=恢复AI。
+    幂等:known 记每条上次状态,只变化才调,失败不记、下轮重试。"""
+    state = _load_state()
+    known = state.setdefault("handover", {})
+    rows = fs.search_records(cfg.PROG_APP, cfg.PROG_TABLE, "转人工", "is", "true")
+    cur_true = {r["record_id"] for r in rows}
+    done = 0
+    for r in rows:  # 新勾上的
+        rid = r["record_id"]
+        if known.get(rid) is True:
+            continue
+        _sync_handover(rid, True, _cell(r["fields"].get("姓名")), known)
+        if known.get(rid) is True:
+            done += 1
+    for rid in [k for k, v in list(known.items()) if v is True and k not in cur_true]:  # 取消勾选的
+        _sync_handover(rid, False, rid, known)
         done += 1
     _save_state(state)
     return done

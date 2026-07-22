@@ -40,6 +40,8 @@ class Config:
     KB_TABLE = os.environ.get("KB_TABLE_ID", "tblogUqdG4hxuZ9f")
 
     POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL_SEC", "120"))
+    # 慢循环间隔:手动简历/岗位校正/改期/面评这些不需要秒级,拉全表遍历,默认60秒一轮
+    SLOW_INTERVAL = int(os.environ.get("SLOW_INTERVAL_SEC", "60"))
     # DRY_RUN=true 只识别打日志、不真写表/不真触达。切生产前务必先演练。
     DRY_RUN = _bool(os.environ.get("DRY_RUN", "true"), True)
     # 单轮最多处理几个（0=不限）。演练时可设小一点。

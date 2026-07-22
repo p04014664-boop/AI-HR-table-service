@@ -37,10 +37,18 @@ class Feishu:
                 params["user_id_type"] = "open_id"
             if pt:
                 params["page_token"] = pt
-            r = requests.get(
-                f"{BASE}/bitable/v1/apps/{app}/tables/{table}/records",
-                headers=self._h(), params=params, timeout=40,
-            ).json()
+            r = {"code": -1}
+            for _ in range(5):  # 大表分页偶发 1254607 Data not ready / 限流,重试
+                r = requests.get(
+                    f"{BASE}/bitable/v1/apps/{app}/tables/{table}/records",
+                    headers=self._h(), params=params, timeout=40,
+                ).json()
+                if r.get("code") == 0:
+                    break
+                if r.get("code") in (1254607, 1254291) or "not ready" in str(r.get("msg", "")).lower():
+                    time.sleep(2)
+                    continue
+                break  # 其他错误不重试
             if r.get("code") != 0:
                 raise RuntimeError(f"list_records {app}: {r.get('code')} {r.get('msg')}")
             out += r["data"].get("items", [])
@@ -49,28 +57,54 @@ class Feishu:
                 break
         return out
 
-    def get_record(self, app, table, rid):
-        """按 record_id 直查单条(比全表扫快两个量级)。不存在返回 None。"""
-        r = requests.get(
-            f"{BASE}/bitable/v1/apps/{app}/tables/{table}/records/{rid}",
-            headers=self._h(), timeout=20,
-        ).json()
-        if r.get("code") != 0:
+    def get_record(self, app, table, rid, automatic=False):
+        """按 record_id 直查单条(比全表扫快两个量级)。automatic=True 带自动字段(last_modified_by 等)。不存在/失败返回 None。"""
+        params = {"automatic_fields": "true", "user_id_type": "open_id"} if automatic else {}
+        for _ in range(3):  # 偶发超时/Data not ready 重试
+            try:
+                r = requests.get(f"{BASE}/bitable/v1/apps/{app}/tables/{table}/records/{rid}",
+                                 headers=self._h(), params=params, timeout=25).json()
+            except requests.exceptions.RequestException:
+                time.sleep(1.5); continue
+            if r.get("code") == 0:
+                return r["data"]["record"]
+            if r.get("code") in (1254607, 1254291) or "not ready" in str(r.get("msg", "")).lower():
+                time.sleep(1.5); continue
             return None
-        return r["data"]["record"]
+        return None
 
-    def search_records(self, app, table, field, operator, value, limit=5):
-        """条件搜索(如 联系方式 contains 手机号)，服务端过滤，不拉全表。"""
-        r = requests.post(
-            f"{BASE}/bitable/v1/apps/{app}/tables/{table}/records/search",
-            headers=self._h(), params={"page_size": limit},
-            json={"filter": {"conjunction": "and",
-                             "conditions": [{"field_name": field, "operator": operator, "value": [value]}]}},
-            timeout=20,
-        ).json()
-        if r.get("code") != 0:
-            return []
-        return r["data"].get("items", [])
+    def search_records(self, app, table, field, operator, value, limit=500):
+        """条件搜索(如 HR评估 is 约面 / 联系方式 contains 手机号)，服务端过滤，不拉全表。
+        自动翻页,最多取 limit 条。注意:search 接口不返回自动字段(last_modified_by),要它用 get_record(automatic=True)。"""
+        out, pt = [], None
+        while True:
+            params = {"page_size": min(limit, 500)}
+            if pt:
+                params["page_token"] = pt
+            r = {"code": -1}
+            for _ in range(4):  # 偶发超时/Data not ready 重试
+                try:
+                    r = requests.post(
+                        f"{BASE}/bitable/v1/apps/{app}/tables/{table}/records/search",
+                        headers=self._h(), params=params,
+                        json={"filter": {"conjunction": "and",
+                                         "conditions": [{"field_name": field, "operator": operator, "value": [value]}]}},
+                        timeout=30,
+                    ).json()
+                except requests.exceptions.RequestException:
+                    time.sleep(2); continue
+                if r.get("code") == 0:
+                    break
+                if r.get("code") in (1254607, 1254291) or "not ready" in str(r.get("msg", "")).lower():
+                    time.sleep(2); continue
+                break
+            if r.get("code") != 0:
+                return out
+            out += r["data"].get("items", [])
+            pt = r["data"].get("page_token")
+            if not r["data"].get("has_more") or len(out) >= limit:
+                break
+        return out
 
     def create_record(self, app, table, fields):
         r = requests.post(
