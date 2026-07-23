@@ -1,3 +1,7 @@
+## 🔁 协作流程（2026-07-23 起）
+
+表格服务改动一律走 PR：玄玄开 PR（base=main，不直接 push main）→ 发秒聘开发群 @宏佳 → 自动 review（通过则自动合并）→ 由宏佳侧统一部署（deploy.sh：备份 → main 纯净快照 rsync → docker build → 换容器 → 健康检查，失败自动回滚）。部署后 commit 会写入 /opt/aihr-table-service/.deployed_commit，可随时核对线上版本。
+
 # HANDOFF · 句子秒聘表格管理服务
 
 给接手同事/另一个工具。看这份 + `PRODUCT.md` + `README.md` 就能接。
