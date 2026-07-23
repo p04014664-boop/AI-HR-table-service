@@ -31,7 +31,7 @@ def cycle_slow():
     except Exception as e:
         log.error(f"拉进度表失败,慢循环跳过: {e}")
         return
-    # rule1 约面同步:主路径是事件驱动(events.py),这里轮询兜底补漏
+    # rule1 约面同步:主路径是飞书多维表格自动化 webhook(/table-event→handle_aihr_event),这里轮询兜底补漏
     try:
         n1 = rules.rule1_sync()
         if n1:

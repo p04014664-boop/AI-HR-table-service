@@ -31,9 +31,26 @@ def _load_state():
     return {"synced": [], "reached": []}
 
 
-def _save_state(s):
+def _write_state(s):
+    """原子落盘(tmp+replace)。调用方须持有 _sync_lock。"""
     os.makedirs(os.path.dirname(cfg.STATE_FILE) or ".", exist_ok=True)
-    json.dump(s, open(cfg.STATE_FILE, "w"), ensure_ascii=False)
+    tmp = cfg.STATE_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(s, f, ensure_ascii=False)
+    os.replace(tmp, cfg.STATE_FILE)
+
+
+def _save_state(s):
+    """主循环规则存整个 state → 收口到 _sync_lock,并在锁内重读磁盘最新 synced 覆回。
+    防止主循环用陈旧 synced 清掉 webhook 线程(_finish)刚落盘的白名单 → 候选人重复建档
+    (=187 bug 换姿势偶发复发,宏佳 review 指出)。synced 只由 _finish 在锁内独占写;
+    其余 key(reached/handover/round_invited…)只有主循环单线程写,不冲突。"""
+    with _sync_lock:
+        try:
+            s["synced"] = _load_state().get("synced", s.get("synced", []))
+        except Exception:
+            pass
+        _write_state(s)
 
 
 def _enrich_candidate(rid, name, f, opts, phone_written):
@@ -108,7 +125,7 @@ def _prog_options():
 
 
 import threading as _threading
-_sync_lock = _threading.Lock()
+_sync_lock = _threading.RLock()  # 可重入:_save_state 也在锁内,防嵌套自锁
 _inflight = set()  # 正在处理的候选人ID,防 webhook 与轮询并发建两条
 
 
@@ -131,7 +148,7 @@ def _finish(cid, ok):
             s = set(st.get("synced", []))
             s.add(cid)
             st["synced"] = list(s)
-            _save_state(st)
+            _write_state(st)  # 已在锁内,直接原子落盘;不走会覆盖 synced 的 _save_state
 
 
 def _sync_one(full, opts, interviewer=None):
@@ -193,7 +210,7 @@ def rule1_sync():
     state = _load_state()
     synced = set(state["synced"])
     opts = _prog_options()
-    records = fs.search_records(cfg.AIHR_APP, cfg.AIHR_TABLE, "HR评估", "is", "约面")
+    records = fs.search_records(cfg.AIHR_APP, cfg.AIHR_TABLE, "HR评估", "is", "约面", limit=10000)
     done = 0
     for r in records:
         cid = _cell(r["fields"].get("AIHR候选人ID")) or r["record_id"]
@@ -696,3 +713,87 @@ def rule3_manual_resume(records):
             log.info(f"✅ 手动简历已识别填充: {rec.get('姓名', '?')} ({r['record_id']})")
         done += 1
     return done
+
+
+# ============ 规则⑩ 逐字稿自动收集（全自动·用户身份，2026-07-23）============
+# 背景：app 身份读不了人拥有的妙记（飞书把 app 当"非组织成员"，组织内可见只对人开放）。
+#       用【用户身份】搜+读真实面试的「文字记录」文档（已用句子局长用户 token 在真实逐字稿上实测通）。
+# 链路：面试结束 → 妙记生成「文字记录:线上面试-{岗位}-{姓名}」→ 本规则用户身份按标题搜到 →
+#       把文档链接写进【逐字稿链接】→ 触发已有规则⑨自动出面评。全程零人工。
+# ⚠️ 未接进 main.py 主循环——上线前要：①玄玄开用户 scope+redirect ②服务账号 OAuth 一次
+#    ③本地/测试验过再 wire。seeding 铁律：首启把"已发生过的面试"全视为已处理，绝不回填历史（防刷屏）。
+_fu = None
+_TRANSCRIPT_MIN_AGE = 30 * 60      # 面试结束多久后才去搜（妙记生成+索引要时间）
+_TRANSCRIPT_GIVEUP = 7 * 86400     # 面试过去这么久还没搜到就放弃（没开录制/无妙记）
+
+
+def _interview_ms(f):
+    """读【一面时间】为毫秒时间戳（字段可能是数字/字符串），拿不到返回 None。"""
+    v = f.get("一面时间")
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = _cell(v).strip()
+    return int(s) if s.isdigit() else None
+
+
+def rule10_collect_transcript(records):
+    """逐字稿自动收集（用户身份）。见本节顶部说明。"""
+    import time as _t
+    global _fu
+    if _fu is None:
+        from feishu_user import FeishuUser
+        _fu = FeishuUser()
+    if not _fu.authorized():
+        log.warning("规则⑩：用户身份未授权，跳过（先跑 oauth_bootstrap.py）")
+        return 0
+    now_ms = int(_t.time() * 1000)
+    state = _load_state()
+    done = state.setdefault("transcript", {})   # {rid: 写入的链接}
+    # —— seeding：首启把"已发生过的面试/已有逐字稿"全登记为已处理，只管之后新完成的面试 ——
+    if not state.get("transcript_seeded"):
+        n = 0
+        for r in records:
+            f = r["fields"]
+            past = (_interview_ms(f) or 0) and _interview_ms(f) < now_ms
+            if _cell(f.get("逐字稿链接")).strip() or past:
+                done[r["record_id"]] = "SEED"
+                n += 1
+        state["transcript_seeded"] = True
+        _save_state(state)
+        log.info(f"规则⑩首启：预置存量 {n} 条为已处理（不回填历史），只管之后新完成的面试")
+        return 0
+    n = 0
+    for r in records:
+        rid, f = r["record_id"], r["fields"]
+        if rid in done or _cell(f.get("逐字稿链接")).strip():
+            continue
+        name = _cell(f.get("姓名"))
+        t_ms = _interview_ms(f)
+        if not name or not t_ms:
+            continue
+        age = now_ms - t_ms
+        if age < _TRANSCRIPT_MIN_AGE * 1000:
+            continue                              # 面试还没结束/刚结束，等妙记生成
+        if age > _TRANSCRIPT_GIVEUP * 1000:
+            done[rid] = "GIVEUP"; _save_state(state)
+            log.info(f"规则⑩ {name}：面试过去 >{_TRANSCRIPT_GIVEUP//86400} 天仍无文字记录，放弃（未开录制?）")
+            continue
+        try:
+            hit = _fu.find_transcript(name, _cell(f.get("岗位")))
+        except Exception as e:
+            log.warning(f"规则⑩ {name} 搜文字记录失败（用户 token?）: {e}")
+            continue
+        if not hit:
+            continue                              # 还没搜到，下轮再试（不标 done）
+        _title, _tok, url = hit
+        if cfg.DRY_RUN:
+            log.info(f"[DRY] 规则⑩ {name} → 找到文字记录 {_title}，将写【逐字稿链接】{url}")
+            done[rid] = url; _save_state(state); n += 1
+            continue
+        try:
+            fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"逐字稿链接": url})
+            done[rid] = url; _save_state(state); n += 1
+            log.info(f"✅ 规则⑩ {name} 逐字稿链接已自动填入（{_title}）→ 规则⑨将出面评")
+        except Exception as e:
+            log.warning(f"规则⑩ {name} 写【逐字稿链接】失败: {e}")
+    return n
