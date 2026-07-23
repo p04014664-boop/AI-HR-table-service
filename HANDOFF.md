@@ -2,6 +2,18 @@
 
 给接手同事/另一个工具。看这份 + `PRODUCT.md` + `README.md` 就能接。
 
+## 🟡 逐字稿自动收集·调研记录（2026-07-23·暂停,待另一端口/下次接手）
+
+**目标**:面试后自动把逐字稿收进【逐字稿链接】→ rule9 出面评。**在服务器用 cli_aad38 app 身份实测,结论如下(调研脚本 verify_minutes.py/create_test_meeting.py/create_meeting2.py 已入库,一次性,不进镜像)**:
+- ✅ **VC 录制接口租户级**:`list_by_no`(会议号→meeting_id)→`GET /vc/v1/meetings/{id}/recording` 拿到妙记链接。app 能读**任何**会议的录制。已开权限 `vc:record:readonly`。
+- ❌ **妙记 transcript 按归属**:`/minutes/v1/minutes/{token}/transcript` app 身份**读不了「人」拥有的妙记,连"组织内可见"也不行**(2091005 permission deny)。已开 `minutes:minutes.transcript:export`(scope 有,归属绕不过)。**这是真正的墙**。
+- ⚠️ 机器人建的会议**开不起来**(机器人自己进不去开会;参会人要正确邀请+allow_attendees_start)。
+- ⚠️ 通讯录:已开 `contact:user.id:readonly`+获取用户基本信息、管理后台通讯录范围=全员;但邮箱查 openId 仍空(玄玄邮箱 zhangxuaxuan/zhangxuanxuan@juzi.bot 都 code 0 空,待核实真实邮箱/手机)。
+
+**结论**:app 身份全自动读妙记被平台堵死。**下一步走「用户身份读」**:①超管设「会议妙记默认组织内可见」②一个 HR 账号 OAuth 授权(要开**用户身份**的妙记权限,非应用身份)③服务用该用户 token 读 transcript。面试正常由人开录→妙记组织可见→服务用 HR 账号身份读→出面评。**未验证的假设**:用户身份能读组织可见妙记(语义上应能,没实测)。**兜底(现可用)**:HR 把妙记导出成飞书文档、贴进【逐字稿链接】,rule9 已能读文档出面评。
+
+**代码现状**:auto-collection 规则**还没写进 rules.py**(纯调研,主代码未动)→ **并行改其他功能零冲突**。恢复时:新建分支写"用户身份读妙记"逻辑,别直接推 main。
+
 ## 🔴 事故复盘·2026-07-23（synced.add bug 刷屏 187 条·已闭环）
 
 **现象**:进度表被无限复制同一条「于兆涵」测试约面记录(AI-HR 里 recvq6afNjJheL,HR评估=约面)→刷出 187 条。**根因**=线上旧代码 rules.py `synced.add(cid)` 引用未定义名(synced 只是 rule1_sync 局部变量)→真实建档必 NameError→`_finish` 的 ok 到不了 True→白名单不落盘→每轮轮询/每次回调都当没处理过、无限重建。**处置(玄玄授权 SSH,本轮玄玄侧亲自部署)**:①`docker stop aihr-table` 止血 ②cleanup_yzh.py 删 187 条(仅备忘录=AI约面同步,0 误伤)+把源头 cid 1784717695223000 加进 data/state.json 白名单 ③rsync 修复版 rules.py(commit 9e561f8:删 synced.add + 豆包判岗位异步化)→`docker build -t aihr-table .`→rm 旧容器→`docker run -d --name aihr-table --network aihr-net -p 127.0.0.1:8090:8090 --env-file .env -v /opt/aihr-table-service/data:/app/data --restart unless-stopped aihr-table` ④验证 45s 不再刷、于兆涵归零。**教训**:①白名单落盘是唯一防重复屏障,`_finish(ok=True)` 必须真跑到 ②SSH 22 被那三个 `until ssh` 死循环疯狂重试触发防爆破封禁,杀掉循环即解封。**⚠️线上现在跑的是 9e561f8(异步判岗位版),已不是旧的 17:48 版**。
