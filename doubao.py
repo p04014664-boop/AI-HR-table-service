@@ -23,7 +23,8 @@ def _chat(messages):
         json={"model": model, "messages": messages, "temperature": 0.0, "max_tokens": 4096},
         timeout=90,
     ).json()
-    if not r.get("choices"):  # 缺 choices 或 choices 为空列表(网关 4xx/鉴权失败/被过滤)→可读报错
+    # 缺 choices / choices 空列表 / 返回不是 dict(如网关吐 JSON 数组)→统一给可读报错,不抛 KeyError|AttributeError
+    if not isinstance(r, dict) or not r.get("choices"):
         raise RuntimeError(f"LLM 返回异常({model}): {str(r)[:300]}")
     return r["choices"][0]["message"]["content"].strip()
 
