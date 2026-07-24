@@ -23,6 +23,8 @@ def _chat(messages):
         json={"model": model, "messages": messages, "temperature": 0.0, "max_tokens": 4096},
         timeout=90,
     ).json()
+    if "choices" not in r:  # 网关 4xx/404/鉴权失败等,给可读报错而非 KeyError
+        raise RuntimeError(f"LLM 返回异常({model}): {str(r)[:300]}")
     return r["choices"][0]["message"]["content"].strip()
 
 

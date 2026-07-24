@@ -766,6 +766,8 @@ def rule10_collect_transcript(records):
     done = state.setdefault("transcript", {})   # {rid: 写入的链接}
     # —— seeding：首启把"已发生过的面试/已有逐字稿"全登记为已处理，只管之后新完成的面试 ——
     if not state.get("transcript_seeded"):
+        if not records:
+            return 0  # 拉表为空(疑拉表失败)不 seeding,否则漏掉的历史面试下轮会被回填刷屏
         n = 0
         for r in records:
             f = r["fields"]
@@ -794,16 +796,15 @@ def rule10_collect_transcript(records):
             log.info(f"规则⑩ {name}：面试过去 >{_TRANSCRIPT_GIVEUP//86400} 天仍无文字记录，放弃（未开录制?）")
             continue
         try:
-            hit = _fu.find_transcript(name, _cell(f.get("岗位")))
+            hit = _fu.find_transcript(name, _cell(f.get("岗位")), t_ms)
         except Exception as e:
             log.warning(f"规则⑩ {name} 搜文字记录失败（用户 token?）: {e}")
             continue
         if not hit:
-            continue                              # 还没搜到，下轮再试（不标 done）
+            continue                              # 还没搜到/多命中放弃，下轮再试（不标 done）
         _title, _tok, url = hit
         if cfg.DRY_RUN:
-            log.info(f"[DRY] 规则⑩ {name} → 找到文字记录 {_title}，将写【逐字稿链接】{url}")
-            done[rid] = url; _save_state(state); n += 1
+            log.info(f"[DRY] 规则⑩ {name} → 找到文字记录 {_title}，将写【逐字稿链接】{url}（DRY 不落 state）")
             continue
         try:
             fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"逐字稿链接": url})

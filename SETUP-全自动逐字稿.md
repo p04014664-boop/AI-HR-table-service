@@ -18,7 +18,8 @@
 - `search:docs:read`（搜云文档）
 - `offline_access`（拿 refresh_token，token 长期自动刷新；不加则 access_token 约 2 小时过期、无法续）
 
-并在**"安全设置 → 重定向 URL"**加一个回调地址（拿授权码用，可用 `https://open.feishu.cn/api-explorer/loopback`）。
+并在**"安全设置 → 重定向 URL"**加一个回调地址（拿授权码用）：`http://localhost:8080/callback`。
+（⚠️别用 `api-explorer/loopback`——会被调试台吞掉 code；localhost 页面打不开，但 code 会停在浏览器地址栏里，复制即可。）
 
 > 若用独立 spider app，把它的 app_id/secret 配成服务器 `.env` 的 `FEISHU_USER_APP_ID`/`FEISHU_USER_APP_SECRET`；用秒聘同一个 app 就不用配，代码自动回退到 `FEISHU_APP_ID/SECRET`。
 
