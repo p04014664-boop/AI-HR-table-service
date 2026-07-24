@@ -6,7 +6,26 @@
 
 给接手同事/另一个工具。看这份 + `PRODUCT.md` + `README.md` 就能接。
 
-## 🟡 逐字稿自动收集·调研记录（2026-07-23·暂停,待另一端口/下次接手）
+## 🔴 逐字稿·「轻路(app 自动读)」已被证伪,全自动只能走 A(用户 OAuth)（2026-07-23·实测定论）
+**⚠️⚠️ 纠错(别再走轻路)**:先前记的"app 身份自动抓妙记文字记录=轻路已验证"是**误判**,当轮就在服务器测死了。经过:先误按 B(半自动)做→香蕉大王要全自动→我提出"app 直接抓文字记录 docx、省掉 OAuth"的轻路,一度以为验证通过,实为假阳性。
+**真相(app 身份 docker exec 实测,香蕉大王授权 SSH)**:
+- ❌ **飞书把 app(机器人)当"非组织成员"**:「组织内可见」只对**人**开放、不对 app 开放。香蕉大王把一篇**真人**妙记设成组织可见后,app 仍**搜不到**它的文字记录、minutes 接口仍 `2091005 permission deny`。
+- ❌ **之前"能读的那篇文字记录"是假证据**:`文字记录:线上面试-HR-张玄玄(E2E测试勿删)` (H6L7...) 的 **owner_id=ou_e1b139a3b774f69bf55815eb83fb3b8c=秒聘 app 自己的 bot open_id**(bot/v3/info 确认 name=秒聘)。app 能读它是因为**读自己建的文件**,不是因为组织可见。
+- ✅ **app 只能读**:①自己建的文档(面评文档 owner 全是这个 bot open_id)②被**单独分享给秒聘 app**的文档(面评Prompt Nsgbw1j1 能读=当初特意分享给了 app,非靠组织可见)。
+- **规律**:app 读文档 = 自己 owner 或显式协作者;**「组织内可见」≠ app 可读**。
+**定论**:**app 自动读人拥有的妙记/文字记录 = 平台堵死,无解**。真正的全自动**必须用用户身份**——HR 账号是组织成员,用它的 token 才能读组织内可见的妙记。**即图里 A**:①妙记默认组织可见(对未来所有面试生效,不是一篇篇改)②一个 HR/服务账号 OAuth 授权一次拿用户 token③写"用户 token 读妙记+token 刷新"逻辑+联调。是**正经小工程**。**香蕉大王已拍板:现在就做 A**。
+**✅ A 地基已用真实数据验证(2026-07-23,句子局长用户 token 实测)**:用户身份 ①搜"文字记录 线上面试"返回 **251 条含真实妙记**(app 只搜到自己建的那 1 篇)②`feishu doc fetch` **读出真实逐字稿**`文字记录:线上面试-AI管培生-杨淑丽`(@杨淑丽/@李佳芮 带时间戳全文 31.7KB)。→ 用户身份"搜+读真实妙记文字记录"实证可行,A 地基是实的。**句子局长(cli_a969ff... ou_412fbf...=香蕉大王个人身份)只是验证代理,不能当生产 reader(个人登录, 违玄玄铁律)——生产要专用服务账号 OAuth。** 其 scope 含 minutes:minutes.search:read/vc:record:readonly/docs:document.content:read/search:docs:read,可作 A 所需 scope 参照。
+**🔎 妙记可见性(2026-07-23,香蕉大王管理后台截图核实)**:飞书**没有"新妙记默认组织可见"的管理员总开关**——视频会议→会议设置→规则配置详情页只有:录制开关/自动录制、录制文件对外分享/保护/下载审核、智能纪要生成/邀请函,无"妙记默认可见范围"。妙记默认=**仅组织者可见,非组织者需申请**。→ **不走"设默认可见",改走"服务账号当会议组织者"**:建会那步用服务账号身份建(现归面试官,改成服务账号建+面试官当主持人),组织者原生可看妙记→服务账号直接读,免任何可见性设置、免面试官动手。⚠️待建时验证(服务账号当组织者能否读妙记;理论成立=组织者可看+用户身份能读均已验,但组合未亲测,别当定论)。**依赖收敛为**:①玄玄开用户 scope+redirect ②建会改用服务账号身份+服务账号 OAuth 一次。
+**✅✅ A 核心已端到端打通(2026-07-23,服务器实测,秒聘 app cli_aad38 自己的用户 OAuth)**:香蕉大王本人 HR 账号授权秒聘 app 一次(浏览器 authen/v1/authorize→localhost:8080/callback 拿 code→服务器 authen/v2/oauth/token 换)。实测:①换 token code=0、**含 refresh_token**(offline_access 已授)、expires_in 7200②`suite/docs-api/search/object` 搜"文字记录 线上面试"=10 篇**真实面试**(Marry/邢质斌/张玉婷/肖慕杨/李郡/章真…)③`docx raw_content` **读出 Marry 那场完整逐字稿 9929 字**(@马瑞/@张玄玄 带时间戳)④token 落盘 `/opt/aihr-table-service/data/user_token.json`(容器 /app/data,含 refresh,自动续)。**用户身份搜+读真实妙记逐字稿=生产可用,不再是假设。** ⚠️OAuth 踩坑:①redirect 用 `api-explorer/loopback` 会被调试台吞掉 code→改用 `http://localhost:8080/callback`(页面打不开但 code 停在地址栏)②读 docx 正文要 `docx:document:readonly`,只给 docs:document.content:read 报 99991679③authorization code 有效期极短(~1分钟),换要快④offline_access 要在权限管理显式加、authorize scope 带上才有 refresh_token。**已开用户 scope**:docx:document:readonly + docs:document.content:read + search:docs:read + offline_access。
+**剩余(全我方)**:①部署 feishu_user.py+rule10 上服务器+接 main.py cycle_slow(rule9 前)②确认 feishu_user.refresh() 用落盘 token 能续③DRY 跑验证 rule10 搜得准④真面试 E2E⑤确认香蕉大王账号能否看别的面试官的面试(看不到再上"服务账号当组织者")。
+**A 建设(进行中,新文件不碰线上)**:①`feishu_user.py` 用户 token 客户端(OAuth 换/刷 token+搜文字记录+读正文)②自动收集 rule(按 `文字记录:线上面试-{岗位}-{姓名}` 搜→填【逐字稿链接】→触发 rule9;上线必先 seeding)③`SETUP-全自动逐字稿.md`。**两个外部依赖(gates 上线)**:玄玄在 app 开用户身份 scope+redirect URI;定一个服务账号做一次 OAuth+妙记默认组织可见。
+**香蕉大王已做**:把一篇妙记设组织可见(=A 第 1 步的一次,但需变默认/统一)。
+**⚠️ B(半自动)SOP 也要改**:`面试官-逐字稿SOP.md` 原写"导出+设组织内可读→app 能读"——**错**,组织可读不够,导出文档得**显式分享给秒聘 app** app 才读得到。B 现有兜底价值有限,除非配一个"共享给 app 的文件夹/知识库"让面试官把文字记录丢进去。
+**rule9 现状(不受影响)**:读 `/docx//wiki/` 链接出面评的主逻辑 7/19 E2E 通;但前提是那篇文档 app 有权限读(自建或被分享)。`verify_doc_read.py` 为本轮一次性验证脚本。
+
+## 🟡 逐字稿自动收集·调研记录（2026-07-23·部分结论已被上面🟢🟢推翻）
+
+> ⚠️ 本节结论"app 读妙记被平台堵死→只能走用户身份 OAuth"**已被上面🟢🟢🟢的轻路发现推翻**:被墙的只是 `/minutes/` transcript API(归属),而妙记生成的**「文字记录 docx」app 能按标题搜到+读**——绕开了墙,不需要 OAuth。下面调研记录保留作背景。
 
 **目标**:面试后自动把逐字稿收进【逐字稿链接】→ rule9 出面评。**在服务器用 cli_aad38 app 身份实测,结论如下(调研脚本 verify_minutes.py/create_test_meeting.py/create_meeting2.py 已入库,一次性,不进镜像)**:
 - ✅ **VC 录制接口租户级**:`list_by_no`(会议号→meeting_id)→`GET /vc/v1/meetings/{id}/recording` 拿到妙记链接。app 能读**任何**会议的录制。已开权限 `vc:record:readonly`。

@@ -546,7 +546,7 @@ def rule9_interview_eval(records):
                 _save_state(state)
             continue
         try:
-            transcript = fs.read_doc_content(m.group(1))
+            transcript = _read_transcript(m.group(1))
         except Exception:
             try:  # wiki 链接:先换 obj_token 再读
                 transcript = fs.read_doc_content(fs.wiki_obj_token(m.group(1)))
@@ -720,11 +720,26 @@ def rule3_manual_resume(records):
 #       用【用户身份】搜+读真实面试的「文字记录」文档（已用句子局长用户 token 在真实逐字稿上实测通）。
 # 链路：面试结束 → 妙记生成「文字记录:线上面试-{岗位}-{姓名}」→ 本规则用户身份按标题搜到 →
 #       把文档链接写进【逐字稿链接】→ 触发已有规则⑨自动出面评。全程零人工。
-# ⚠️ 未接进 main.py 主循环——上线前要：①玄玄开用户 scope+redirect ②服务账号 OAuth 一次
-#    ③本地/测试验过再 wire。seeding 铁律：首启把"已发生过的面试"全视为已处理，绝不回填历史（防刷屏）。
+# 已接进 main.py cycle_slow（在规则⑨之前跑）。用户 scope+redirect 已开、服务账号(玄玄HR账号)已OAuth、
+# token 落 data/user_token.json 自动续。seeding 铁律：首启把"已发生过的面试"全视为已处理，绝不回填历史（防刷屏）。
 _fu = None
 _TRANSCRIPT_MIN_AGE = 30 * 60      # 面试结束多久后才去搜（妙记生成+索引要时间）
 _TRANSCRIPT_GIVEUP = 7 * 86400     # 面试过去这么久还没搜到就放弃（没开录制/无妙记）
+
+
+def _read_transcript(doc_id):
+    """读逐字稿正文：优先用户身份(能读妙记「文字记录」文档,app 读不了)，
+    未授权/失败回退应用身份(能读 app 自建或被分享的文档)。规则⑨/⑩共用。"""
+    global _fu
+    try:
+        if _fu is None:
+            from feishu_user import FeishuUser
+            _fu = FeishuUser()
+        if _fu.authorized():
+            return _fu.read_doc(doc_id)
+    except Exception as e:
+        log.warning(f"用户身份读逐字稿失败,回退app: {e}")
+    return fs.read_doc_content(doc_id)
 
 
 def _interview_ms(f):
@@ -751,6 +766,8 @@ def rule10_collect_transcript(records):
     done = state.setdefault("transcript", {})   # {rid: 写入的链接}
     # —— seeding：首启把"已发生过的面试/已有逐字稿"全登记为已处理，只管之后新完成的面试 ——
     if not state.get("transcript_seeded"):
+        if not records:
+            return 0  # 拉表为空(疑拉表失败)不 seeding,否则漏掉的历史面试下轮会被回填刷屏
         n = 0
         for r in records:
             f = r["fields"]
@@ -779,16 +796,15 @@ def rule10_collect_transcript(records):
             log.info(f"规则⑩ {name}：面试过去 >{_TRANSCRIPT_GIVEUP//86400} 天仍无文字记录，放弃（未开录制?）")
             continue
         try:
-            hit = _fu.find_transcript(name, _cell(f.get("岗位")))
+            hit = _fu.find_transcript(name, _cell(f.get("岗位")), t_ms)
         except Exception as e:
             log.warning(f"规则⑩ {name} 搜文字记录失败（用户 token?）: {e}")
             continue
         if not hit:
-            continue                              # 还没搜到，下轮再试（不标 done）
+            continue                              # 还没搜到/多命中放弃，下轮再试（不标 done）
         _title, _tok, url = hit
         if cfg.DRY_RUN:
-            log.info(f"[DRY] 规则⑩ {name} → 找到文字记录 {_title}，将写【逐字稿链接】{url}")
-            done[rid] = url; _save_state(state); n += 1
+            log.info(f"[DRY] 规则⑩ {name} → 找到文字记录 {_title}，将写【逐字稿链接】{url}（DRY 不落 state）")
             continue
         try:
             fs.update_record(cfg.PROG_APP, cfg.PROG_TABLE, rid, {"逐字稿链接": url})
