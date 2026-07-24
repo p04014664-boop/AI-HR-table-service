@@ -68,15 +68,18 @@ def ai_section(fs, position, fields, position_hint=""):
 
 
 def generate(fs, name, position, fields, resume_data=None, resume_name="简历.pdf", position_hint=""):
-    blocks = [_h3("一、简历")] + ai_section(fs, position, fields, position_hint) + \
+    # 笔试节(玄玄需求13:00:面评第一部分加笔试,占位待后续补充)。放最前面——
+    # 不能夹在「二、AI初筛」和「三、面试评价」之间,否则 resync()岗位校正会把它当AI节吃掉。
+    blocks = [_h3("笔试（待补充）"),
+              _h3("一、简历")] + ai_section(fs, position, fields, position_hint) + \
              [_h3("三、面试评价"), _p("一面："), _p("二面："), _p("三面：")]
     title = f"面试评价-{position or 'xx岗位'}-{name or 'xxx'}"
     did, url = fs.create_doc(title, blocks)
 
-    # 把原始简历文件嵌到"一、简历"标题(index 0)之后
+    # 把原始简历文件嵌到"一、简历"标题(现在 index 1:笔试[0]之后)之后
     if resume_data:
         try:
-            fs.insert_file_block(did, 1, resume_name, resume_data)
+            fs.insert_file_block(did, 2, resume_name, resume_data)
         except Exception:
             pass
     # 开组织内可编辑：应用建的文档默认只应用是 owner，HR 打不开/改不了，这里放开给公司同事
