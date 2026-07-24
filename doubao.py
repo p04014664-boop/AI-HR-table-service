@@ -1,4 +1,5 @@
-"""豆包(火山方舟)客户端：同一模型既能读文字、也能看图。"""
+"""大模型客户端（OpenAI 兼容 chat/completions）：同一模型既能读文字、也能看图。
+默认走句子内部网关 gpt-4o(配了 LLM_KEY)，与触达统一；没配 LLM_KEY 则回退火山豆包。"""
 import json
 import base64
 import requests
@@ -7,11 +8,19 @@ from config import cfg
 ARK = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
 
 
+def _target():
+    """返回 (url, key, model)：有网关 key 走网关 gpt-4o，否则回退火山豆包。"""
+    if cfg.LLM_KEY:
+        return cfg.LLM_BASE.rstrip("/") + "/v1/chat/completions", cfg.LLM_KEY, cfg.LLM_MODEL
+    return ARK, cfg.ARK_API_KEY, cfg.ARK_MODEL
+
+
 def _chat(messages):
+    url, key, model = _target()
     r = requests.post(
-        ARK,
-        headers={"Authorization": f"Bearer {cfg.ARK_API_KEY}", "Content-Type": "application/json"},
-        json={"model": cfg.ARK_MODEL, "messages": messages, "temperature": 0.0, "max_tokens": 4096},
+        url,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json={"model": model, "messages": messages, "temperature": 0.0, "max_tokens": 4096},
         timeout=90,
     ).json()
     return r["choices"][0]["message"]["content"].strip()

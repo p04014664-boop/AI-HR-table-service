@@ -41,6 +41,7 @@ def cycle_slow():
     for label, fn in [("链路B手动简历", lambda: rules.rule3_manual_resume(prog)),
                       ("规则④岗位校正联动", lambda: rules.rule4_position_correction(prog)),
                       ("规则⑧改期联动", lambda: rules.rule8_time_change(prog)),
+                      ("规则⑩逐字稿自动收集", lambda: rules.rule10_collect_transcript(prog)),
                       ("规则⑨面后面评", lambda: rules.rule9_interview_eval(prog))]:
         try:
             n = fn()

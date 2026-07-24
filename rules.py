@@ -546,7 +546,7 @@ def rule9_interview_eval(records):
                 _save_state(state)
             continue
         try:
-            transcript = fs.read_doc_content(m.group(1))
+            transcript = _read_transcript(m.group(1))
         except Exception:
             try:  # wiki 链接:先换 obj_token 再读
                 transcript = fs.read_doc_content(fs.wiki_obj_token(m.group(1)))
@@ -720,11 +720,26 @@ def rule3_manual_resume(records):
 #       用【用户身份】搜+读真实面试的「文字记录」文档（已用句子局长用户 token 在真实逐字稿上实测通）。
 # 链路：面试结束 → 妙记生成「文字记录:线上面试-{岗位}-{姓名}」→ 本规则用户身份按标题搜到 →
 #       把文档链接写进【逐字稿链接】→ 触发已有规则⑨自动出面评。全程零人工。
-# ⚠️ 未接进 main.py 主循环——上线前要：①玄玄开用户 scope+redirect ②服务账号 OAuth 一次
-#    ③本地/测试验过再 wire。seeding 铁律：首启把"已发生过的面试"全视为已处理，绝不回填历史（防刷屏）。
+# 已接进 main.py cycle_slow（在规则⑨之前跑）。用户 scope+redirect 已开、服务账号(玄玄HR账号)已OAuth、
+# token 落 data/user_token.json 自动续。seeding 铁律：首启把"已发生过的面试"全视为已处理，绝不回填历史（防刷屏）。
 _fu = None
 _TRANSCRIPT_MIN_AGE = 30 * 60      # 面试结束多久后才去搜（妙记生成+索引要时间）
 _TRANSCRIPT_GIVEUP = 7 * 86400     # 面试过去这么久还没搜到就放弃（没开录制/无妙记）
+
+
+def _read_transcript(doc_id):
+    """读逐字稿正文：优先用户身份(能读妙记「文字记录」文档,app 读不了)，
+    未授权/失败回退应用身份(能读 app 自建或被分享的文档)。规则⑨/⑩共用。"""
+    global _fu
+    try:
+        if _fu is None:
+            from feishu_user import FeishuUser
+            _fu = FeishuUser()
+        if _fu.authorized():
+            return _fu.read_doc(doc_id)
+    except Exception as e:
+        log.warning(f"用户身份读逐字稿失败,回退app: {e}")
+    return fs.read_doc_content(doc_id)
 
 
 def _interview_ms(f):

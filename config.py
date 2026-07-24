@@ -13,9 +13,16 @@ class Config:
     FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "")
     FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
 
-    # 火山方舟 / 豆包（应用级 key）
+    # 火山方舟 / 豆包（应用级 key）——网关没配 key 时的回退
     ARK_API_KEY = os.environ.get("ARK_API_KEY", "")
     ARK_MODEL = os.environ.get("ARK_MODEL", "doubao-seed-2-0-lite-260428")
+
+    # 大模型网关（句子内部 OpenAI 兼容代理，与触达统一）。配了 LLM_KEY 就走网关 gpt-4o(文字+看图)，
+    # 没配则回退火山豆包(ARK_*)。宏佳已在 aihr-table .env 配 LLM_KEY。
+    # ⚠️网关地址只有 host:port、不带路径，POST 时要自己拼 /v1/chat/completions(直打根路径 404)。
+    LLM_BASE = os.environ.get("LLM_PROXY_ENDPOINT", "http://jz-openai-proxy.juzibot.com:2222")
+    LLM_KEY = os.environ.get("LLM_KEY", "")
+    LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4o")
 
     # AI-HR 来源表（深澜）
     AIHR_APP = os.environ.get("AIHR_APP_TOKEN", "H4NTbtLkia9z3fsO0c7cWDWNnod")
